@@ -1,0 +1,67 @@
+{
+    "name": "innis/hubstr-relay",
+    "description": "A personal Nostr relay in PHP: your public presence and private event archive in one SQLite-backed server, managed over NIP-86.",
+    "type": "project",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "John Innis",
+            "email": "john@innis.xyz",
+            "homepage": "https://www.innis.xyz/"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "ext-ctype": "*",
+        "ext-mbstring": "*",
+        "ext-pdo_sqlite": "*",
+        "amphp/amp": "^3",
+        "amphp/byte-stream": "^2",
+        "amphp/http-server": "^3.4",
+        "amphp/http-server-router": "^2.0",
+        "amphp/http-server-static-content": "^2.0",
+        "amphp/parallel": "^2",
+        "amphp/sync": "^2",
+        "innis/hubstr-core": "^0.2",
+        "innis/nostr-core": "^0.8",
+        "innis/nostr-relay": "^0.9",
+        "monolog/monolog": "^3.10",
+        "psr/log": "^3.0"
+    },
+    "require-dev": {
+        "ext-ffi": "*",
+        "friendsofphp/php-cs-fixer": "^3.95",
+        "innis/coding-standards": "^0.1",
+        "phpstan/phpstan": "~2.2.6",
+        "phpstan/phpstan-phpunit": "^2.0",
+        "phpunit/phpunit": "^13.1",
+        "rector/rector": "~2.5.9"
+    },
+    "autoload": {
+        "psr-4": {
+            "Innis\\Hubstr\\Relay\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Innis\\Hubstr\\Relay\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": [
+            "phpunit",
+            "@analyse"
+        ],
+        "test-unit": "phpunit --testsuite=Unit",
+        "test-integration": "phpunit --testsuite=Integration",
+        "test-coverage": "XDEBUG_MODE=coverage phpunit --coverage-html var/tests/coverage/html --coverage-text --coverage-clover var/tests/coverage/clover.xml",
+        "analyse": "phpstan analyse",
+        "fix-style": "php-cs-fixer fix",
+        "check-style": "php-cs-fixer fix --dry-run --diff",
+        "rector": "rector process",
+        "check-rector": "rector process --dry-run"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

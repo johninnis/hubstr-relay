@@ -1,0 +1,29 @@
+# Hubstr Relay — systemd service unit
+# Copy to /etc/systemd/system/hubstr-relay.service and edit the
+# User, WorkingDirectory, and ReadWritePaths values for your host.
+
+[Unit]
+Description=Hubstr Relay
+After=network.target
+
+[Service]
+Type=simple
+User=hubstr
+WorkingDirectory=/srv/hubstr-relay
+ExecStart=/usr/bin/php bin/hubstr-relay.php
+Restart=on-failure
+RestartSec=5
+
+# Shutdown finishes the in-flight requests, ends the worker processes with the
+# relay and exits in well under a second. Cap the wait so a future regression can
+# never hold the stop open for systemd's 90s default.
+TimeoutStopSec=15
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/hubstr-relay/var /srv/hubstr-relay/data
+
+[Install]
+WantedBy=multi-user.target

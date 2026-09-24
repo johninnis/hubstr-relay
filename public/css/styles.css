@@ -1,0 +1,101 @@
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/Inter-Regular.woff2") format("woff2");
+}
+
+:root {
+  --color-background: #f0f0f0;
+  --color-text: #14171a;
+  --color-focus-ring: #14171a;
+  --color-accent-solid: #feca00;
+  --color-text-on-accent: #14171a;
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: monospace;
+
+  --text-body: 14px;
+  --text-heading: 16px;
+  --leading: 24px;
+
+  --space-within: 8px;
+  --space-between: 16px;
+  --space-page: 24px;
+
+  --logo-size: 80px;
+  --pubkey-measure: 32ch;
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: #000000;
+    --color-text: #fefefe;
+    --color-focus-ring: #fefefe;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  min-block-size: 100vh;
+  inline-size: calc(var(--pubkey-measure) + (var(--space-page) * 4));
+  margin-block: 0;
+  margin-inline: auto;
+  padding: var(--space-page);
+  font-family: var(--font-mono);
+  font-size: var(--text-body);
+  line-height: var(--leading);
+  color: var(--color-text);
+  background: var(--color-background);
+  word-break: break-all;
+}
+
+.logo {
+  display: block;
+  inline-size: var(--logo-size);
+  block-size: var(--logo-size);
+}
+
+@media (prefers-color-scheme: dark) {
+  .logo {
+    filter: invert(1);
+  }
+}
+
+h1 {
+  margin-block: 0 var(--space-between);
+  margin-inline: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-heading);
+  font-weight: 400;
+  line-height: var(--leading);
+  text-align: center;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.pubkey {
+  padding-block: var(--space-within);
+  padding-inline: var(--space-page);
+  color: var(--color-text-on-accent);
+  background-color: var(--color-accent-solid);
+}

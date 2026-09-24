@@ -1,0 +1,23 @@
+/vendor/
+/var/
+
+/phpunit.xml
+/phpstan.neon
+/.php-cs-fixer.php
+/rector.php
+.php-cs-fixer.cache
+.phpunit.result.cache
+.phpunit.cache
+
+*.swp
+.#*
+/.idea/
+/.vscode/
+
+.claude/
+
+# Application runtime (composer.lock is committed, so NOT ignored)
+/data/
+/temp/
+*.jsonl
+/config/relay.php

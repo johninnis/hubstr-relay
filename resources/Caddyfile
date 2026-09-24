@@ -1,0 +1,28 @@
+# Hubstr Relay — Caddy reverse proxy
+# Automatic TLS + WebSocket upgrade + NIP-86 JSON-RPC
+#
+# Caddy implements RFC 8441 and RFC 9220, so WebSockets work over
+# HTTP/1.1, HTTP/2 and HTTP/3 with no special handling.
+#
+# TLS / certificates are fully automatic:
+#   - On first start Caddy obtains a certificate from Let's Encrypt via ACME
+#     (ZeroSSL is tried as a fallback) and renews it ~30 days before expiry.
+#   - Ports 80 and 443 must be reachable from the internet for the ACME
+#     challenge; port 80 is also where HTTP -> HTTPS redirection is served.
+#   - Certificates and ACME account keys are stored under Caddy's data dir
+#     (e.g. /var/lib/caddy/.local/share/caddy), not in /etc/letsencrypt.
+# No certbot, no manual renewal, no redirect block required.
+
+{
+	# ACME account email — used for expiry notices. Replace with your own.
+	email admin@example.com
+}
+
+# Replace with your own domain, e.g. relay.innis.xyz
+relay.example.com {
+	reverse_proxy 127.0.0.1:8080
+
+	request_body {
+		max_size 1MB
+	}
+}
