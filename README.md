@@ -149,10 +149,10 @@ composer install
 cp config/relay.example.php config/relay.php
 ```
 
-**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.1.0`) in its NIP-11 document and landing page rather than a branch ref:
+**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.1.1`) in its NIP-11 document and landing page rather than a branch ref:
 
 ```bash
-git checkout v0.1.0
+git checkout v0.1.1
 composer install --no-dev
 ```
 
