@@ -27,6 +27,7 @@
   --logo-size: 80px;
   --pubkey-measure: 32ch;
 
+  color-scheme: light dark;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -49,7 +50,7 @@ body {
   justify-content: center;
   flex-direction: column;
   min-block-size: 100vh;
-  inline-size: calc(var(--pubkey-measure) + (var(--space-page) * 4));
+  max-inline-size: calc(var(--pubkey-measure) + (var(--space-page) * 4));
   margin-block: 0;
   margin-inline: auto;
   padding: var(--space-page);
@@ -58,7 +59,6 @@ body {
   line-height: var(--leading);
   color: var(--color-text);
   background: var(--color-background);
-  word-break: break-all;
 }
 
 .logo {
@@ -81,6 +81,13 @@ h1 {
   font-weight: 400;
   line-height: var(--leading);
   text-align: center;
+  text-wrap: balance;
+}
+
+h1 a {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 a {
@@ -96,6 +103,7 @@ a:focus-visible {
 .pubkey {
   padding-block: var(--space-within);
   padding-inline: var(--space-page);
+  overflow-wrap: anywhere;
   color: var(--color-text-on-accent);
   background-color: var(--color-accent-solid);
 }
