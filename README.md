@@ -17,19 +17,7 @@ This means your relay is your public Nostr presence *and* your private event arc
 
 ## How it works
 
-```
-┌─────────────┐     events from      ┌───────────────┐
-│ Other relays │ ──── other relays ──→ │               │
-└─────────────┘     via your client   │               │
-                                      │  Hubstr Relay │ ← SQLite (WAL mode)
-┌─────────────┐     your events,      │               │
-│   Anyone     │ ←── public access ── │               │
-└─────────────┘                       └───────────────┘
-                                            ↑
-┌─────────────┐     full cache,       ┌─────┘
-│     You      │ ←── NIP-42 authed ───┘
-└─────────────┘
-```
+![Diagram of how Hubstr Relay receives events from other relays via your client, stores them in SQLite, serves public events to anyone, and serves the full cache to you over NIP-42](docs/diagram.svg)
 
 The relay never connects outbound to other relays. It only receives events pushed to it and serves them back on request.
 
