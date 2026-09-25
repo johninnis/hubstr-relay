@@ -222,7 +222,7 @@ final class RpcHandlerTest extends TestCase
         $response = $this->authenticatedRpc('{"method":"listallowedpubkeys"}');
 
         $data = $this->decodeResponse($response);
-        $this->assertSame([$this->tenantKeyPair->getPublicKey()->toHex()], $data['result']);
+        $this->assertSame([['pubkey' => $this->tenantKeyPair->getPublicKey()->toHex()]], $data['result']);
     }
 
     public function testAllowAndUnallowPubkey(): void

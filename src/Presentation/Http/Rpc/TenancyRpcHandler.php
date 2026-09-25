@@ -62,11 +62,14 @@ final readonly class TenancyRpcHandler implements RpcMethodHandlerInterface
     }
 
     /**
-     * @return list<string>
+     * @return list<array{pubkey: string}>
      */
     private function listAllowedPubkeys(): array
     {
-        return $this->policyState->getTenantPubkeys()->toHexes();
+        return array_map(
+            static fn (string $hex): array => ['pubkey' => $hex],
+            $this->policyState->getTenantPubkeys()->toHexes(),
+        );
     }
 
     /**

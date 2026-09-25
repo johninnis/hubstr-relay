@@ -72,11 +72,14 @@ final readonly class BlockingRpcHandler implements RpcMethodHandlerInterface
     }
 
     /**
-     * @return list<string>
+     * @return list<array{pubkey: string}>
      */
     private function listBannedPubkeys(): array
     {
-        return $this->policyState->getBannedPubkeys()->toHexes();
+        return array_map(
+            static fn (string $hex): array => ['pubkey' => $hex],
+            $this->policyState->getBannedPubkeys()->toHexes(),
+        );
     }
 
     private function banWord(RpcParams $params): true|RpcRejection

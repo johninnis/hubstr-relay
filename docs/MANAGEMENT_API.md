@@ -117,7 +117,7 @@ The last tenant cannot be removed — a relay with none has nobody left who can 
 Removing a pubkey that is not a tenant is a no-op and returns `true`.
 
 #### `listallowedpubkeys`
-List all tenant pubkeys.
+List all tenant pubkeys, as NIP-86 records. This relay records no reason for a tenancy, so the optional `reason` field is omitted.
 
 ```json
 {"method": "listallowedpubkeys"}
@@ -125,8 +125,8 @@ List all tenant pubkeys.
 ```json
 {
   "result": [
-    "12405b5e4e499939ec32ea80e25707d76ca039931ad4bb6bf2bae0719335d5bf",
-    "a3e4f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3"
+    {"pubkey": "12405b5e4e499939ec32ea80e25707d76ca039931ad4bb6bf2bae0719335d5bf"},
+    {"pubkey": "a3e4f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3"}
   ]
 }
 ```
@@ -163,7 +163,7 @@ Unblock a pubkey.
 ```
 
 #### `listbannedpubkeys`
-List blocked pubkeys.
+List blocked pubkeys, as NIP-86 records. This relay records no reason for a pubkey ban, so the optional `reason` field is omitted.
 
 ```json
 {"method": "listbannedpubkeys"}
@@ -171,7 +171,7 @@ List blocked pubkeys.
 ```json
 {
   "result": [
-    "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4"
+    {"pubkey": "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4"}
   ]
 }
 ```
