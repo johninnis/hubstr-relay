@@ -66,7 +66,7 @@ final readonly class RpcHandler
         $result = $this->handleRpc($request);
 
         return $result instanceof RpcRejection
-            ? $this->jsonResponse(Nip86Response::failure($result->getMessage()), $result->getStatus())
+            ? $this->rejectionResponse($result)
             : $this->jsonResponse(Nip86Response::success($result));
     }
 
@@ -127,10 +127,17 @@ final readonly class RpcHandler
     private function supportedMethods(): array
     {
         $methods = array_keys($this->handlersByMethod);
-        $methods[] = Nip86Method::SupportedMethods->value;
         sort($methods);
 
         return $methods;
+    }
+
+    private function rejectionResponse(RpcRejection $rejection): Response
+    {
+        $response = $this->jsonResponse(Nip86Response::failure($rejection->getMessage()), $rejection->getStatus());
+        $response->setHeader('x-reason', $rejection->getMessage());
+
+        return $response;
     }
 
     private function jsonResponse(Nip86Response $response, int $status = HttpStatus::OK): Response

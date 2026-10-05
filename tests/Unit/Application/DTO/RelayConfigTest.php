@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Innis\Hubstr\Relay\Tests\Unit\Infrastructure\Config;
+namespace Innis\Hubstr\Relay\Tests\Unit\Application\DTO;
 
 use Innis\Hubstr\Core\Domain\Enum\LogLevel;
 use Innis\Hubstr\Core\Domain\ValueObject\ConfigValues;
-use Innis\Hubstr\Relay\Infrastructure\Config\RelayConfig;
+use Innis\Hubstr\Relay\Application\DTO\RelayConfig;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
@@ -33,7 +33,7 @@ final class RelayConfigTest extends TestCase
         $this->assertSame('Test Relay', $info->getName());
         $this->assertSame('A test relay', $info->getDescription());
         $this->assertSame([1, 9, 11, 40, 42, 45, 50, 70, 86, 98], $info->getSupportedNips());
-        $this->assertSame('hubstr-relay', $info->getSoftware());
+        $this->assertSame('https://www.hubstr.xyz/relay/', $info->getSoftware());
         $this->assertSame('wss://relay.example.com', (string) $config->getRelayUrl());
         $this->assertSame((string) $config->getRelayUrl(), (string) $info->getRelayUrl());
     }
@@ -69,6 +69,16 @@ final class RelayConfigTest extends TestCase
         $this->assertSame(1000, $limits->getMaxLimit());
     }
 
+    public function testTheEventLimitsApplyTheConfiguredMaxContentLength(): void
+    {
+        $data = $this->validConfig();
+        $data['limits'] = ['max_content_length' => 200_000];
+
+        $limits = RelayConfig::fromValues(ConfigValues::fromArray($data))->getEventLimits();
+
+        $this->assertSame([true, false], [$limits->admitsContentLength(200_000), $limits->admitsContentLength(200_001)]);
+    }
+
     public function testRejectsAMaxConnectionsThatIsNotAnInteger(): void
     {
         $data = $this->validConfig();
@@ -91,13 +101,13 @@ final class RelayConfigTest extends TestCase
         RelayConfig::fromValues(ConfigValues::fromArray($data));
     }
 
-    public function testRejectsAMaxLimitOutsideTheRangeAFilterCanCarry(): void
+    public function testRejectsAMaxLimitThatReadsNothing(): void
     {
         $data = $this->validConfig();
         $data['limits'] = ['max_limit' => 0];
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('limits.max_limit must be between 1 and');
+        $this->expectExceptionMessage('limits.max_limit must be a positive integer');
 
         RelayConfig::fromValues(ConfigValues::fromArray($data));
     }

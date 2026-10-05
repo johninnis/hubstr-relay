@@ -16,11 +16,12 @@ final readonly class PubkeyCount implements ExploreEntryInterface
     ) {
     }
 
-    /**
-     * @param array<array-key, mixed> $data
-     */
-    public static function tryFromArray(array $data): ?self
+    public static function tryFromArray(mixed $data): ?self
     {
+        if (!is_array($data)) {
+            return null;
+        }
+
         $hex = JsonWireFormat::stringField($data, 'pubkey');
         $pubkey = null === $hex ? null : PublicKey::tryFromHex($hex);
         $count = JsonWireFormat::intField($data, 'count');

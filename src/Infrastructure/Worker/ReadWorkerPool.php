@@ -78,20 +78,6 @@ final class ReadWorkerPool
         return $result;
     }
 
-    /**
-     * @return list<mixed>
-     */
-    public function queryForList(ReadQueryInterface $query): array
-    {
-        $result = $this->query($query);
-
-        if (!is_array($result)) {
-            throw new WorkerResultException('Read worker returned an unexpected result, expected list');
-        }
-
-        return array_values($result);
-    }
-
     private function replaceChannel(): void
     {
         $factory = $this->channelFactory;

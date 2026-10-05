@@ -21,6 +21,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\KeyPair;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
+use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use PDO;
 use PHPUnit\Framework\TestCase;
 
@@ -56,7 +57,7 @@ final class ReadWorkerTaskTest extends TestCase
 
         self::assertCount(1, $channel->sent);
         $events = $channel->sent[0];
-        self::assertIsArray($events);
+        self::assertInstanceOf(StoredEventCollection::class, $events);
         self::assertCount(1, $events);
     }
 
@@ -71,7 +72,7 @@ final class ReadWorkerTaskTest extends TestCase
         new ReadWorkerTask($this->database)->run($channel, new NullCancellation());
 
         $found = $channel->sent[0];
-        self::assertIsArray($found);
+        self::assertInstanceOf(StoredEventCollection::class, $found);
         self::assertCount(1, $found);
         self::assertEquals(EventCount::exact(1), $channel->sent[1]);
     }

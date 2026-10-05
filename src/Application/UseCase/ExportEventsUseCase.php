@@ -51,13 +51,13 @@ final readonly class ExportEventsUseCase
         $filters = [];
 
         if (null !== $criteria->getAuthor()) {
-            $filters[] = new Filter(authors: new PublicKeyCollection([$criteria->getAuthor()]), kinds: $kinds, since: $since, until: $until);
+            $filters[] = Filter::from(authors: new PublicKeyCollection([$criteria->getAuthor()]), kinds: $kinds, since: $since, until: $until);
         }
         if (null !== $criteria->getTagged()) {
-            $filters[] = new Filter(tags: TagFilter::fromValues([TagType::PUBKEY => [$criteria->getTagged()->toHex()]]), kinds: $kinds, since: $since, until: $until);
+            $filters[] = Filter::from(tags: TagFilter::fromValues([TagType::PUBKEY => [$criteria->getTagged()->toHex()]]), kinds: $kinds, since: $since, until: $until);
         }
         if ([] === $filters) {
-            $filters[] = new Filter(kinds: $kinds, since: $since, until: $until);
+            $filters[] = Filter::from(kinds: $kinds, since: $since, until: $until);
         }
 
         return new FilterCollection($filters);

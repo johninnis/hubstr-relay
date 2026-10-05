@@ -28,12 +28,11 @@ final class SignedEventFactory
 
     public static function signedEvent(KeyPair $keyPair, EventKind $kind, string $content, ?TagCollection $tags = null): Event
     {
-        $rumour = new Rumour(
+        $rumour = Rumour::draft(
             $keyPair->getPublicKey(),
-            Timestamp::now(),
             $kind,
+            EventContent::fromString($content),
             $tags ?? new TagCollection(),
-            EventContent::fromString($content)
         );
 
         return $rumour->sign($keyPair, self::signer());
@@ -41,12 +40,12 @@ final class SignedEventFactory
 
     public static function signedEventAtTime(KeyPair $keyPair, EventKind $kind, string $content, int $timestamp, ?TagCollection $tags = null): Event
     {
-        $rumour = new Rumour(
+        $rumour = Rumour::draft(
             $keyPair->getPublicKey(),
-            Timestamp::fromInt($timestamp),
             $kind,
+            EventContent::fromString($content),
             $tags ?? new TagCollection(),
-            EventContent::fromString($content)
+            Timestamp::fromInt($timestamp),
         );
 
         return $rumour->sign($keyPair, self::signer());

@@ -23,8 +23,10 @@ use Innis\Hubstr\Core\Infrastructure\Templating\LatteTemplateRenderer;
 use Innis\Hubstr\Core\Presentation\Http\ErrorPageResponder;
 use Innis\Hubstr\Core\Presentation\Http\LandingPageResponder;
 use Innis\Hubstr\Core\Presentation\Http\TemplatedErrorHandler;
+use Innis\Hubstr\Relay\Application\DTO\RelayConfig;
 use Innis\Hubstr\Relay\Application\Port\RelayStateInterface;
 use Innis\Hubstr\Relay\Application\Service\HubstrPolicy;
+use Innis\Hubstr\Relay\Application\Service\ImportAdmission;
 use Innis\Hubstr\Relay\Application\Service\Nip11InfoProvider;
 use Innis\Hubstr\Relay\Application\Service\TenantAuthenticator;
 use Innis\Hubstr\Relay\Application\UseCase\BanUseCase;
@@ -35,7 +37,6 @@ use Innis\Hubstr\Relay\Application\UseCase\RemoveTenantUseCase;
 use Innis\Hubstr\Relay\Application\UseCase\UpdateRateLimitsUseCase;
 use Innis\Hubstr\Relay\Infrastructure\Auth\InMemoryNip98ReplayGuard;
 use Innis\Hubstr\Relay\Infrastructure\Collection\LifecycleCollection;
-use Innis\Hubstr\Relay\Infrastructure\Config\RelayConfig;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\CachingExploreQuery;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\CachingStatsProvider;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\PolicyReadStore;
@@ -53,6 +54,8 @@ use Innis\Hubstr\Relay\Infrastructure\Process\RelayLifecycle;
 use Innis\Hubstr\Relay\Infrastructure\RateLimiting\PolicyStateRateLimitPolicy;
 use Innis\Hubstr\Relay\Infrastructure\Relay\LiveRelayState;
 use Innis\Hubstr\Relay\Infrastructure\Retention\ExpirySweepScheduler;
+use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshPipeline;
+use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshRotation;
 use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshSchedule;
 use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshScheduler;
 use Innis\Hubstr\Relay\Infrastructure\Worker\ReadContext;
@@ -75,6 +78,7 @@ use Innis\Nostr\Core\Application\Port\ClockInterface;
 use Innis\Nostr\Core\Application\Port\RandomBytesGeneratorInterface;
 use Innis\Nostr\Core\Application\Service\Nip98Validator;
 use Innis\Nostr\Core\Domain\Service\EventValidator;
+use Innis\Nostr\Core\Domain\Service\Nip98EventChecker;
 use Innis\Nostr\Core\Domain\Service\NipComplianceValidator;
 use Innis\Nostr\Core\Domain\Service\SignatureServiceInterface;
 use Innis\Nostr\Core\Infrastructure\Crypto\NativeRandomBytesGenerator;
@@ -149,8 +153,11 @@ final class RelayContainer
         $this->migrate();
 
         return new ImportEventUseCase(
-            new EventValidator($this->signer(), new NipComplianceValidator($this->signer())),
-            $this->loadedPolicyState(),
+            new ImportAdmission(
+                new EventValidator($this->signer(), new NipComplianceValidator($this->signer()), $this->config->getEventLimits()),
+                $this->loadedPolicyState(),
+                $this->clock(),
+            ),
             WriteContext::forConnection($this->database())->getEventWriteStore(),
         );
     }
@@ -287,14 +294,15 @@ final class RelayContainer
             eventStore: new WorkerEventStore($this->writeCoordinator(), $this->readWorkers(), $this->config->getRelayLimits()->getMaxLimit()),
             policy: new HubstrPolicy($this->policyState(), $this->authenticationRegistry(), $this->config->getRelayLimits()),
             config: $this->config,
-            rateLimitPolicy: new PolicyStateRateLimitPolicy($this->policyState()),
-            authenticationRegistry: $this->authenticationRegistry(),
-            logger: $this->logger,
-            nip11InfoProvider: $this->nip11InfoProvider(),
-            signatureService: $this->signer(),
-            connectionGate: $this->policyState(),
-            randomBytes: $this->randomBytes(),
-        )->create($httpServer);
+        )
+            ->withRateLimitPolicy(new PolicyStateRateLimitPolicy($this->policyState()))
+            ->withAuthenticationRegistry($this->authenticationRegistry())
+            ->withNip11InfoProvider($this->nip11InfoProvider())
+            ->withSignatureService($this->signer())
+            ->withConnectionGate($this->policyState())
+            ->withRandomBytes($this->randomBytes())
+            ->withLogger($this->logger)
+            ->create($httpServer);
     }
 
     private function rpcHandler(RelayStateInterface $relayState): RpcHandler
@@ -331,7 +339,7 @@ final class RelayContainer
     private function tenantAuthenticator(): TenantAuthenticator
     {
         return new TenantAuthenticator(
-            new Nip98Validator($this->signer(), replayGuard: new InMemoryNip98ReplayGuard($this->clock()), clock: $this->clock()),
+            new Nip98Validator(new Nip98EventChecker($this->signer()), replayGuard: new InMemoryNip98ReplayGuard($this->clock()), clock: $this->clock()),
             $this->config->getRelayUrl(),
             $this->policyState(),
         );
@@ -377,10 +385,8 @@ final class RelayContainer
     private function scheduler(): StatsRefreshScheduler
     {
         return $this->scheduler ??= new StatsRefreshScheduler(
-            new ContextWorkerPool(limit: 1),
-            StatsRefreshSchedule::forDatabase($this->sqliteDatabase()),
-            $this->writeCoordinator(),
-            $this->logger,
+            new StatsRefreshRotation(StatsRefreshSchedule::forDatabase($this->sqliteDatabase())),
+            new StatsRefreshPipeline(new ContextWorkerPool(limit: 1), $this->writeCoordinator(), $this->logger),
         );
     }
 }

@@ -23,7 +23,6 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\WriteCoordinator;
 use Innis\Hubstr\Relay\Tests\Fake\CapturingConnection;
 use Innis\Hubstr\Relay\Tests\Fake\DirectWriteChannel;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
-use Innis\Nostr\Core\Domain\Collection\EventCollection;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\Collection\EventKindCollection;
@@ -56,20 +55,26 @@ use Innis\Nostr\Relay\Application\Service\AcceptedEventPublisher;
 use Innis\Nostr\Relay\Application\Service\AuthChallengeIssuer;
 use Innis\Nostr\Relay\Application\Service\ClientMessenger;
 use Innis\Nostr\Relay\Application\Service\EventAdmission;
+use Innis\Nostr\Relay\Application\Service\EventAudience;
 use Innis\Nostr\Relay\Application\Service\EventDeletionProcessor;
 use Innis\Nostr\Relay\Application\Service\EventDistributor;
+use Innis\Nostr\Relay\Application\Service\EventValidityGate;
 use Innis\Nostr\Relay\Application\Service\InMemoryAuthenticationRegistry;
 use Innis\Nostr\Relay\Application\Service\InMemoryClientRegistry;
 use Innis\Nostr\Relay\Application\Service\InMemorySubscriptionRegistry;
+use Innis\Nostr\Relay\Application\Service\PublishingGate;
 use Innis\Nostr\Relay\Application\Service\RateLimitGate;
 use Innis\Nostr\Relay\Application\UseCase\ProcessEventSubmissionUseCase;
+use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\Entity\RelayClient;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
 use Innis\Nostr\Relay\Domain\ValueObject\ClientId;
 use Innis\Nostr\Relay\Domain\ValueObject\ConnectionInfo;
+use Innis\Nostr\Relay\Domain\ValueObject\EventHeader;
 use Innis\Nostr\Relay\Domain\ValueObject\IpAddress;
 use Innis\Nostr\Relay\Infrastructure\Concurrency\AmphpDeferredExecutor;
 use PDO;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use Revolt\EventLoop;
@@ -170,7 +175,7 @@ final class HubstrPolicyTest extends TestCase
         );
         $connection = new CapturingConnection();
 
-        $messages = $this->createSubmissionUseCase()->execute($this->createPipelineClient($connection), $event);
+        $messages = $this->createSubmissionUseCase(RelayLimits::defaults())->execute($this->createPipelineClient($connection), $event);
         EventLoop::run();
 
         $ok = $this->capturedOkMessage($messages);
@@ -178,19 +183,29 @@ final class HubstrPolicyTest extends TestCase
         $this->assertTrue($this->returnedAuthChallenge($messages));
     }
 
-    public function testEventExceedingMaxSizeIsRejectedEvenForTenant(): void
+    public function testContentOverTheConfiguredMaxContentLengthIsRefusedAsInvalidEvenForTenant(): void
     {
-        $client = $this->createAuthenticatedTenantClient();
-        $event = $this->createEvent(
-            EventKind::fromInt(EventKind::TEXT_NOTE),
-            $this->tenantPubkey,
-            content: str_repeat('a', 65537),
-        );
+        $this->policyManagement->addTenant($this->keyPair->getPublicKey());
+        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), str_repeat('a', 11));
+        $client = $this->createPipelineClient(new CapturingConnection());
+        $this->authManager->authenticate($client->getId(), $this->keyPair->getPublicKey());
 
-        $rejection = $this->policy->allowEventSubmission($client, $event);
+        $ok = $this->capturedOkMessage($this->createSubmissionUseCase($this->limitsWithMaxContentLength(10))->execute($client, $event));
 
-        $this->assertNotNull($rejection);
-        $this->assertStringContainsString('event too large', $rejection->toWireReason());
+        $this->assertSame([false, 'invalid: Event content exceeds maximum length'], [$ok[2], $ok[3]]);
+    }
+
+    public function testContentOverTheLibraryDefaultIsStoredWhenTheConfiguredMaxContentLengthAllowsIt(): void
+    {
+        $this->policyManagement->addTenant($this->keyPair->getPublicKey());
+        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), str_repeat('a', 70_000));
+        $client = $this->createPipelineClient(new CapturingConnection());
+        $this->authManager->authenticate($client->getId(), $this->keyPair->getPublicKey());
+
+        $messages = $this->createSubmissionUseCase($this->limitsWithMaxContentLength(100_000))->execute($client, $event);
+        EventLoop::run();
+
+        $this->assertSame([true, 1], [$this->capturedOkMessage($messages)[2], $this->storedEventCount($event)]);
     }
 
     public function testGuestCanSubmitAllowedKindTaggedToTenant(): void
@@ -265,10 +280,10 @@ final class HubstrPolicyTest extends TestCase
             EventKind::fromInt(EventKind::COMMENT),
             $this->guestPubkey,
             new TagCollection([
-                Tag::create('I', self::SITE.'john/3/16'),
-                Tag::create('K', 'web'),
-                Tag::create('e', str_repeat('ab', 32)),
-                Tag::create('k', (string) EventKind::COMMENT),
+                Tag::fromArray(['I', self::SITE.'john/3/16']),
+                Tag::fromArray(['K', 'web']),
+                Tag::fromArray(['e', str_repeat('ab', 32)]),
+                Tag::fromArray(['k', (string) EventKind::COMMENT]),
             ]),
         );
 
@@ -286,7 +301,7 @@ final class HubstrPolicyTest extends TestCase
         $event = $this->createEvent(
             EventKind::fromInt(EventKind::TEXT_NOTE),
             $this->guestPubkey,
-            new TagCollection([Tag::create('i', self::SITE.'john/3/16'), Tag::create('k', 'web')]),
+            new TagCollection([Tag::fromArray(['i', self::SITE.'john/3/16']), Tag::fromArray(['k', 'web'])]),
         );
 
         $this->assertNull(
@@ -363,7 +378,7 @@ final class HubstrPolicyTest extends TestCase
         $this->assertStringContainsString('blocked', $rejection->toWireReason());
     }
 
-    // Deliberate: the blacklist binds a tenant's own event, not only the events it relays — see ADR-0031
+    // Deliberate: the blacklist binds a tenant's own event, not only the events it relays — see ADR-0039
     public function testTenantIsRefusedItsOwnEventCarryingABannedWord(): void
     {
         $this->policyManagement->banWord(BlacklistWord::fromString('spam'));
@@ -389,43 +404,43 @@ final class HubstrPolicyTest extends TestCase
         $this->assertSame('blocked: event rejected by content filter', $rejection->toWireReason());
     }
 
-    public function testAProtectedEventFromAnUnauthenticatedConnectionIsAnsweredAuthRequired(): void
+    // Deliberate: the tenant bypass does not admit a protected event the tenant did not author; the relay library applies NIP-70 after this policy — see ADR-0037
+    public function testATenantRelayingSomeoneElsesProtectedEventIsRestricted(): void
     {
-        $client = $this->createGuestClient();
-        $event = $this->createEvent(EventKind::fromInt(EventKind::TEXT_NOTE), $this->guestPubkey, $this->protectedTags());
+        $this->policyManagement->addTenant($this->keyPair->getPublicKey());
+        $event = SignedEventFactory::signedEvent(KeyPair::generate(SignedEventFactory::signer()), EventKind::fromInt(EventKind::TEXT_NOTE), 'secret', $this->protectedTags());
+        $client = $this->createPipelineClient(new CapturingConnection());
+        $this->authManager->authenticate($client->getId(), $this->keyPair->getPublicKey());
 
-        $rejection = $this->policy->allowEventSubmission($client, $event);
+        $ok = $this->capturedOkMessage($this->createSubmissionUseCase(RelayLimits::defaults())->execute($client, $event));
 
-        $this->assertSame('auth-required: this event may only be published by its author', $rejection?->toWireReason());
+        $this->assertSame([false, 'restricted: this event may only be published by its author'], [$ok[2], $ok[3]]);
     }
 
-    // Deliberate: the tenant bypass does not admit a protected event the tenant did not author — see ADR-0032
-    public function testATenantRelayingSomeoneElsesProtectedEventIsBlocked(): void
+    public function testATenantsProtectedEventRelayedByAnUnauthenticatedConnectionIsAnsweredAuthRequiredWithAChallenge(): void
     {
-        $client = $this->createAuthenticatedTenantClient();
-        $event = $this->createEvent(EventKind::fromInt(EventKind::TEXT_NOTE), $this->guestPubkey, $this->protectedTags());
+        $this->policyManagement->addTenant($this->keyPair->getPublicKey());
+        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'secret', $this->protectedTags());
 
-        $rejection = $this->policy->allowEventSubmission($client, $event);
+        $messages = $this->createSubmissionUseCase(RelayLimits::defaults())->execute($this->createPipelineClient(new CapturingConnection()), $event);
 
-        $this->assertSame('blocked: this event may only be published by its author', $rejection?->toWireReason());
+        $ok = $this->capturedOkMessage($messages);
+        $this->assertSame([false, 'auth-required: this event may only be published by its author'], [$ok[2], $ok[3]]);
+        $this->assertTrue($this->returnedAuthChallenge($messages));
     }
 
-    public function testATenantsProtectedEventRelayedByAGuestIsAnsweredAuthRequired(): void
+    public function testAProtectedEventFromItsAuthenticatedTenantAuthorIsStored(): void
     {
-        $client = $this->createGuestClient();
-        $event = $this->createEvent(EventKind::fromInt(EventKind::TEXT_NOTE), $this->tenantPubkey, $this->protectedTags());
+        $this->policyManagement->addTenant($this->keyPair->getPublicKey());
+        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'secret', $this->protectedTags());
+        $client = $this->createPipelineClient(new CapturingConnection());
+        $this->authManager->authenticate($client->getId(), $this->keyPair->getPublicKey());
 
-        $rejection = $this->policy->allowEventSubmission($client, $event);
+        $messages = $this->createSubmissionUseCase(RelayLimits::defaults())->execute($client, $event);
+        EventLoop::run();
 
-        $this->assertSame('auth-required: this event may only be published by its author', $rejection?->toWireReason());
-    }
-
-    public function testAProtectedEventFromItsAuthenticatedAuthorIsAdmitted(): void
-    {
-        $client = $this->createAuthenticatedTenantClient();
-        $event = $this->createEvent(EventKind::fromInt(EventKind::TEXT_NOTE), $this->tenantPubkey, $this->protectedTags());
-
-        $this->assertNull($this->policy->allowEventSubmission($client, $event));
+        $this->assertTrue($this->capturedOkMessage($messages)[2]);
+        $this->assertSame(1, $this->storedEventCount($event));
     }
 
     public function testForgedZapReceiptIsRejectedAsInvalidEvenForTenant(): void
@@ -482,7 +497,7 @@ final class HubstrPolicyTest extends TestCase
         );
         $connection = new CapturingConnection();
 
-        $messages = $this->createSubmissionUseCase()->execute($this->createPipelineClient($connection), $event);
+        $messages = $this->createSubmissionUseCase(RelayLimits::defaults())->execute($this->createPipelineClient($connection), $event);
         EventLoop::run();
 
         $ok = $this->capturedOkMessage($messages);
@@ -503,7 +518,7 @@ final class HubstrPolicyTest extends TestCase
         );
         $connection = new CapturingConnection();
 
-        $messages = $this->createSubmissionUseCase()->execute($this->createPipelineClient($connection), $event);
+        $messages = $this->createSubmissionUseCase(RelayLimits::defaults())->execute($this->createPipelineClient($connection), $event);
         EventLoop::run();
 
         $ok = $this->capturedOkMessage($messages);
@@ -518,6 +533,17 @@ final class HubstrPolicyTest extends TestCase
         $filters = new FilterCollection([Filter::tryFromArray(['kinds' => [4]])]);
 
         $this->assertNull($this->policy->allowSubscription($client, $filters, 0));
+    }
+
+    public function testATenantFilterHoldingMoreValuesThanTheCeilingIsRefused(): void
+    {
+        $client = $this->createAuthenticatedTenantClient();
+        $filters = new FilterCollection([Filter::tryFromArray(['kinds' => range(1, RelayLimits::defaults()->getMaxFilterValues() + 1)]) ?? self::fail('filter did not parse')]);
+
+        $this->assertSame(
+            'blocked: too many values in one filter (max '.RelayLimits::defaults()->getMaxFilterValues().')',
+            $this->policy->allowSubscription($client, $filters, 0)?->toWireReason(),
+        );
     }
 
     public function testGuestNonReadableKindNarrowsToEmptyAndIsBeyondScope(): void
@@ -560,7 +586,7 @@ final class HubstrPolicyTest extends TestCase
 
         $result = $this->policy->filterForClient($client, $filters);
 
-        $this->assertFalse($result->getFilters()->toArray()[0]->hasAuthors());
+        $this->assertNull($result->getFilters()->toArray()[0]->getAuthors());
         $this->assertFalse($result->isBeyondScope());
     }
 
@@ -588,7 +614,7 @@ final class HubstrPolicyTest extends TestCase
         $client = $this->createAuthenticatedTenantClient();
         $event = $this->createEvent(EventKind::fromInt(4), $this->guestPubkey);
 
-        $this->assertTrue($this->policy->canClientReceiveEvent($client, $event));
+        $this->assertTrue($this->policy->canClientReceiveEvent($client, EventHeader::of($event)));
     }
 
     public function testCanClientReceiveEventGuestSeesOnlyTenantEvents(): void
@@ -598,8 +624,8 @@ final class HubstrPolicyTest extends TestCase
         $tenantEvent = $this->createEvent(EventKind::fromInt(EventKind::TEXT_NOTE), $this->tenantPubkey);
         $guestEvent = $this->createEvent(EventKind::fromInt(EventKind::TEXT_NOTE), $this->guestPubkey);
 
-        $this->assertTrue($this->policy->canClientReceiveEvent($client, $tenantEvent));
-        $this->assertFalse($this->policy->canClientReceiveEvent($client, $guestEvent));
+        $this->assertTrue($this->policy->canClientReceiveEvent($client, EventHeader::of($tenantEvent)));
+        $this->assertFalse($this->policy->canClientReceiveEvent($client, EventHeader::of($guestEvent)));
     }
 
     public function testCanClientReceiveEventGuestCannotSeeNonReadableKind(): void
@@ -607,7 +633,7 @@ final class HubstrPolicyTest extends TestCase
         $client = $this->createGuestClient();
         $event = $this->createEvent(EventKind::fromInt(4), $this->tenantPubkey);
 
-        $this->assertFalse($this->policy->canClientReceiveEvent($client, $event));
+        $this->assertFalse($this->policy->canClientReceiveEvent($client, EventHeader::of($event)));
     }
 
     public function testCanClientReceiveEventGuestSeesGlobalKindFromNonTenant(): void
@@ -615,15 +641,57 @@ final class HubstrPolicyTest extends TestCase
         $client = $this->createGuestClient();
         $event = $this->createEvent(EventKind::fromInt(EventKind::NOSTR_CONNECT), $this->guestPubkey);
 
-        $this->assertTrue($this->policy->canClientReceiveEvent($client, $event));
+        $this->assertTrue($this->policy->canClientReceiveEvent($client, EventHeader::of($event)));
     }
 
-    public function testGuestCannotReceiveGiftWrapEvenWhenTenantAuthored(): void
+    #[DataProvider('giftWrapKinds')]
+    public function testGuestMayDeliverAGiftWrapToATenantByDefault(int $kind): void
+    {
+        $giftWrap = $this->createEvent(
+            EventKind::fromInt($kind),
+            $this->guestPubkey,
+            new TagCollection([Tag::pubkey($this->tenantPubkey)]),
+        );
+
+        $this->assertNull($this->policy->allowEventSubmission($this->createGuestClient(), $giftWrap));
+    }
+
+    #[DataProvider('giftWrapKinds')]
+    public function testGuestGiftWrapThatTagsNoTenantIsRefused(int $kind): void
+    {
+        $giftWrap = $this->createEvent(
+            EventKind::fromInt($kind),
+            $this->guestPubkey,
+            new TagCollection([Tag::pubkey($this->guestPubkey)]),
+        );
+
+        $this->assertNotNull($this->policy->allowEventSubmission($this->createGuestClient(), $giftWrap));
+    }
+
+    public function testGuestEphemeralGiftWrapIsAcceptedButNeverStored(): void
+    {
+        $event = SignedEventFactory::signedEvent(
+            $this->keyPair,
+            EventKind::fromInt(EventKind::EPHEMERAL_GIFT_WRAP),
+            'ciphertext',
+            new TagCollection([Tag::pubkey($this->tenantPubkey)]),
+        );
+        $connection = new CapturingConnection();
+
+        $messages = $this->createSubmissionUseCase(RelayLimits::defaults())->execute($this->createPipelineClient($connection), $event);
+        EventLoop::run();
+
+        $this->assertTrue($this->capturedOkMessage($messages)[2]);
+        $this->assertSame(0, $this->storedEventCount($event));
+    }
+
+    #[DataProvider('giftWrapKinds')]
+    public function testGuestCannotReceiveGiftWrapEvenWhenTenantAuthored(int $kind): void
     {
         $client = $this->createGuestClient();
-        $event = $this->createEvent(EventKind::fromInt(EventKind::GIFT_WRAP), $this->tenantPubkey);
+        $event = $this->createEvent(EventKind::fromInt($kind), $this->tenantPubkey);
 
-        $this->assertFalse($this->policy->canClientReceiveEvent($client, $event));
+        $this->assertFalse($this->policy->canClientReceiveEvent($client, EventHeader::of($event)));
     }
 
     public function testAuthenticatedTenantCanReceiveGiftWrap(): void
@@ -631,14 +699,15 @@ final class HubstrPolicyTest extends TestCase
         $client = $this->createAuthenticatedTenantClient();
         $event = $this->createEvent(EventKind::fromInt(EventKind::GIFT_WRAP), $this->guestPubkey);
 
-        $this->assertTrue($this->policy->canClientReceiveEvent($client, $event));
+        $this->assertTrue($this->policy->canClientReceiveEvent($client, EventHeader::of($event)));
     }
 
-    public function testGuestGiftWrapSubscriptionIsBeyondScopeAndNarrowsToEmpty(): void
+    #[DataProvider('giftWrapKinds')]
+    public function testGuestGiftWrapSubscriptionIsBeyondScopeAndNarrowsToEmpty(int $kind): void
     {
         $client = $this->createGuestClient();
         $filters = new FilterCollection([Filter::tryFromArray([
-            'kinds' => [EventKind::GIFT_WRAP],
+            'kinds' => [$kind],
             '#p' => [$this->tenantPubkey->toHex()],
         ])]);
 
@@ -659,7 +728,7 @@ final class HubstrPolicyTest extends TestCase
         $scoped = $this->policy->filterForClient($client, $filters);
 
         $this->assertFalse($scoped->isBeyondScope());
-        $this->assertFalse($scoped->getFilters()->toArray()[0]->hasAuthors());
+        $this->assertNull($scoped->getFilters()->toArray()[0]->getAuthors());
     }
 
     public function testAuthenticatedTenantIsRateLimitExempt(): void
@@ -690,31 +759,32 @@ final class HubstrPolicyTest extends TestCase
         $client = $this->createGuestClient();
         $event = $this->createEvent(EventKind::fromInt(4), $this->tenantPubkey);
 
-        $this->assertFalse($this->policy->canClientReceiveEvent($client, $event));
+        $this->assertFalse($this->policy->canClientReceiveEvent($client, EventHeader::of($event)));
 
         $this->policyManagement->setGuestPolicy(new GuestPolicy(
             new GuestReadPolicy(EventKindCollection::fromInts([4]), new EventKindCollection(), true),
             new GuestWritePolicy(new EventKindCollection(), false),
         ));
 
-        $this->assertTrue($this->policy->canClientReceiveEvent($client, $event));
+        $this->assertTrue($this->policy->canClientReceiveEvent($client, EventHeader::of($event)));
     }
 
-    public function testStoredAndLiveReadPathsAgreeWhenOnlyGlobalKindsAreReadable(): void
+    #[DataProvider('giftWrapKinds')]
+    public function testStoredAndLiveReadPathsAgreeWhenOnlyGlobalKindsAreReadable(int $kind): void
     {
         $this->policyManagement->setGuestPolicy(new GuestPolicy(
             new GuestReadPolicy(new EventKindCollection(), EventKindCollection::fromInts([EventKind::NOSTR_CONNECT]), false),
             GuestWritePolicy::defaults(),
         ));
         $client = $this->createGuestClient();
-        $giftWrap = $this->createEvent(EventKind::fromInt(EventKind::GIFT_WRAP), $this->guestPubkey);
+        $giftWrap = $this->createEvent(EventKind::fromInt($kind), $this->guestPubkey);
 
         $scoped = $this->policy->filterForClient(
             $client,
-            new FilterCollection([Filter::tryFromArray(['kinds' => [EventKind::GIFT_WRAP]])]),
+            new FilterCollection([Filter::tryFromArray(['kinds' => [$kind]])]),
         );
 
-        $this->assertFalse($this->policy->canClientReceiveEvent($client, $giftWrap));
+        $this->assertFalse($this->policy->canClientReceiveEvent($client, EventHeader::of($giftWrap)));
         $this->assertTrue($scoped->isBeyondScope());
         $this->assertSame([], $scoped->getFilters()->toArray()[0]->getKinds()?->toInts());
     }
@@ -730,7 +800,7 @@ final class HubstrPolicyTest extends TestCase
 
         $scoped = $this->policy->filterForClient($client, new FilterCollection([Filter::tryFromArray([])]));
 
-        $this->assertFalse($this->policy->canClientReceiveEvent($client, $note));
+        $this->assertFalse($this->policy->canClientReceiveEvent($client, EventHeader::of($note)));
         $this->assertSame([], $scoped->getFilters()->toArray()[0]->getKinds()?->toInts());
     }
 
@@ -754,13 +824,22 @@ final class HubstrPolicyTest extends TestCase
         return $this->createEvent(
             EventKind::fromInt(EventKind::COMMENT),
             $this->guestPubkey,
-            new TagCollection([Tag::create('I', $url)]),
+            new TagCollection([Tag::fromArray(['I', $url])]),
         );
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function giftWrapKinds(): iterable
+    {
+        yield 'kind 1059' => [EventKind::GIFT_WRAP];
+        yield 'kind 21059' => [EventKind::EPHEMERAL_GIFT_WRAP];
     }
 
     private function protectedTags(): TagCollection
     {
-        return new TagCollection([Tag::create(TagType::PROTECTED)]);
+        return new TagCollection([Tag::fromArray([TagType::PROTECTED])]);
     }
 
     private function createAuthenticatedTenantClient(): RelayClient
@@ -791,23 +870,23 @@ final class HubstrPolicyTest extends TestCase
         ?TagCollection $tags = null,
         string $content = 'test content',
     ): Event {
-        return SignedEventFactory::fromRumour(new Rumour(
+        return SignedEventFactory::fromRumour(Rumour::draft(
             $pubkey,
-            Timestamp::now(),
             $kind,
+            EventContent::fromString($content),
             $tags ?? new TagCollection(),
-            EventContent::fromString($content)
         ));
     }
 
     private function zapReceiptTags(?PublicKey $recipient = null, bool $withBolt11 = true): TagCollection
     {
         $senderHex = $this->keyPair->getPublicKey()->toHex();
-        $zapRequestJson = json_encode([
-            'pubkey' => $senderHex,
-            'content' => '',
-            'tags' => [['amount', '21000']],
-        ], JSON_THROW_ON_ERROR);
+        $zapRequestJson = SignedEventFactory::signedEvent(
+            $this->keyPair,
+            EventKind::fromInt(EventKind::ZAP_REQUEST),
+            '',
+            new TagCollection([Tag::fromArray(['amount', '21000'])]),
+        )->toJson();
 
         $tags = [
             Tag::tryFromArray(['P', $senderHex]),
@@ -823,15 +902,20 @@ final class HubstrPolicyTest extends TestCase
         return new TagCollection($tags);
     }
 
-    private function createSubmissionUseCase(): ProcessEventSubmissionUseCase
+    private function limitsWithMaxContentLength(int $maxContentLength): RelayLimits
+    {
+        $defaults = RelayLimits::defaults();
+
+        return new RelayLimits($defaults->getMaxSubscriptions(), $defaults->getMaxFilters(), $defaults->getMaxLimit(), $maxContentLength, $defaults->getMaxFilterValues());
+    }
+
+    private function createSubmissionUseCase(RelayLimits $limits): ProcessEventSubmissionUseCase
     {
         $eventStore = $this->directEventStore();
         $clientMessenger = new ClientMessenger($this->clientManager);
 
         $distributor = new EventDistributor(
-            $this->policy,
-            $this->subscriptionManager,
-            $this->clientManager,
+            new EventAudience($this->policy, $this->subscriptionManager, $this->clientManager),
             $clientMessenger,
             new NullLogger(),
         );
@@ -846,7 +930,6 @@ final class HubstrPolicyTest extends TestCase
             $eventStore,
             $acceptedPublisher,
             new EventDeletionProcessor($eventStore, new NullLogger()),
-            new NullLogger(),
         );
 
         $rateLimiter = $this->createStub(RateLimiterInterface::class);
@@ -854,14 +937,14 @@ final class HubstrPolicyTest extends TestCase
 
         return new ProcessEventSubmissionUseCase(
             new EventAdmission(
-                $this->policy,
                 new RateLimitGate($rateLimiter, $this->policy),
-                new EventValidator(SignedEventFactory::signer(), new NipComplianceValidator(SignedEventFactory::signer())),
-                new SystemClock(),
+                new EventValidityGate(
+                    new EventValidator(SignedEventFactory::signer(), new NipComplianceValidator(SignedEventFactory::signer()), $limits->toEventLimits()),
+                    new SystemClock(),
+                ),
+                new PublishingGate($this->policy, $this->authManager, new AuthChallengeIssuer($this->authManager)),
             ),
             $pipeline,
-            new AuthChallengeIssuer($this->authManager),
-            $this->clientManager,
             new NullLogger(),
         );
     }
@@ -878,9 +961,9 @@ final class HubstrPolicyTest extends TestCase
                 return $this->writeStore->store($event);
             }
 
-            public function findByFilters(FilterCollection $filters, int $limit = 100): EventCollection
+            public function findByFilters(FilterCollection $filters): StoredEventCollection
             {
-                return new EventCollection([]);
+                return new StoredEventCollection([]);
             }
 
             public function countByFilters(FilterCollection $filters): EventCount
@@ -893,7 +976,7 @@ final class HubstrPolicyTest extends TestCase
                 return 0;
             }
 
-            public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author): int
+            public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author, Timestamp $until): int
             {
                 return 0;
             }

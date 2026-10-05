@@ -5,17 +5,15 @@ declare(strict_types=1);
 namespace Innis\Hubstr\Relay\Application\UseCase;
 
 use Innis\Hubstr\Relay\Application\Port\EventWriterInterface;
-use Innis\Hubstr\Relay\Application\Port\PolicyStateInterface;
+use Innis\Hubstr\Relay\Application\Service\ImportAdmission;
 use Innis\Hubstr\Relay\Domain\Enum\ImportOutcome;
 use Innis\Nostr\Core\Domain\Entity\Event;
-use Innis\Nostr\Core\Domain\Service\EventValidatorInterface;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
 
 final readonly class ImportEventUseCase
 {
     public function __construct(
-        private EventValidatorInterface $validator,
-        private PolicyStateInterface $policyState,
+        private ImportAdmission $admission,
         private EventWriterInterface $eventStore,
     ) {
     }
@@ -28,12 +26,10 @@ final readonly class ImportEventUseCase
             return ImportOutcome::Failed;
         }
 
-        if (!$this->validator->isEventValid($event)) {
-            return ImportOutcome::Failed;
-        }
+        $refusal = $this->admission->refuse($event);
 
-        if ($this->policyState->isEventBlacklisted($event)) {
-            return ImportOutcome::Skipped;
+        if (null !== $refusal) {
+            return $refusal;
         }
 
         return EventStoreOutcome::Stored === $this->eventStore->store($event)

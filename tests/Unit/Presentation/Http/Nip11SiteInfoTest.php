@@ -41,7 +41,7 @@ final class Nip11SiteInfoTest extends TestCase
 
     public function testFollowsTheDocumentAsItChangesBetweenCalls(): void
     {
-        $relayUrl = RelayUrl::tryFromString('wss://relay.example.com') ?? throw new RuntimeException('Invalid URL');
+        $relayUrl = RelayUrl::fromString('wss://relay.example.com');
         $provider = $this->createStub(Nip11InfoProviderInterface::class);
         $provider->method('getNip11Info')->willReturn(
             Nip11Info::fromArray($relayUrl, ['name' => 'Before']),
@@ -59,7 +59,7 @@ final class Nip11SiteInfoTest extends TestCase
      */
     private function siteInfoFrom(array $document): SiteInfo
     {
-        $relayUrl = RelayUrl::tryFromString('wss://relay.example.com') ?? throw new RuntimeException('Invalid URL');
+        $relayUrl = RelayUrl::fromString('wss://relay.example.com');
         $provider = $this->createStub(Nip11InfoProviderInterface::class);
         $provider->method('getNip11Info')->willReturn(Nip11Info::fromArray($relayUrl, $document));
 

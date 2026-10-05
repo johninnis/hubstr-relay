@@ -71,6 +71,8 @@ Error:
 {"error": "<message>"}
 ```
 
+An error response also carries the message as an `x-reason` header, exposed to browser clients through CORS (`access-control-expose-headers`), so a cross-origin management UI can read it without parsing the body.
+
 Every error carries an HTTP status as well as the message:
 
 | Status | When |
@@ -349,7 +351,7 @@ Controls what unauthenticated users can read and write.
       "from_tenants_only": true
     },
     "write": {
-      "kinds": [1, 7, 1111, 9321, 9735, 1059, 24133],
+      "kinds": [1, 7, 1111, 9321, 9735, 1059, 21059, 24133],
       "tagged_to_tenant": true,
       "tag_prefixes": []
     }
@@ -665,12 +667,14 @@ List all available RPC method names.
     "explore", "getconnection", "getguestpolicy", "getratelimits",
     "getstats", "getwotscore", "listallowedpubkeys", "listbannedhashtags",
     "listbannedpubkeys", "listbannedwords", "listblockedips", "listconnections",
-    "listsubscriptions", "setguestpolicy", "setratelimits", "supportedmethods",
+    "listsubscriptions", "setguestpolicy", "setratelimits",
     "unallowpubkey", "unbanhashtag", "unbanpubkey", "unbanword",
     "unblockip"
   ]
 }
 ```
+
+Per NIP-86, the result names all the other supported methods — `supportedmethods` itself is not listed.
 
 ## All Methods Summary
 

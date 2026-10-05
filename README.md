@@ -51,13 +51,13 @@ Incoming events are checked against a blacklist (managed via the NIP-86 API):
 - **Pubkeys** — events from blacklisted authors are rejected
 - **Hashtags** — events with blacklisted hashtags are rejected
 
-Blacklists are held in memory and updated immediately when changed via the API. They bind every author, tenants included: a ban is a statement about what the relay holds, not about who is trusted, so an operator who wants to publish a banned word unbans it first (see [ADR-0031](docs/adr/0031-the-size-limit-and-the-content-blacklist-are-checked-ahead-of-the-tenant-bypass.md)).
+Blacklists are held in memory and updated immediately when changed via the API. They bind every author, tenants included: a ban is a statement about what the relay holds, not about who is trusted, so an operator who wants to publish a banned word unbans it first (see [ADR-0039](docs/adr/0039-the-size-limit-is-the-event-validators-and-the-content-blacklist-is-checked-ahead.md)).
 
 ## Guest Policy Defaults
 
 Out of the box, unauthenticated users can write:
 
-- Kinds 1 (text notes), 7 (reactions), 1111 (comments), 9321 (nutzaps), 9735 (zap receipts), 1059 (gift wraps), 24133 (Nostr Connect) — each must carry a `p` tag naming a tenant pubkey
+- Kinds 1 (text notes), 7 (reactions), 1111 (comments), 9321 (nutzaps), 9735 (zap receipts), 1059 and 21059 (gift wraps), 24133 (Nostr Connect) — each must carry a `p` tag naming a tenant pubkey
 
 Guest reads default to `from_tenants_only=true`: an unauthenticated client only sees events authored by a tenant pubkey — **except** kinds in the `global_kinds` set, which guests may read regardless of author. Guest read kinds, the `global_kinds` set, the `from_tenants_only` flag, guest write kinds, and the tenant-tagging constraint are all configurable at runtime via `setguestpolicy`.
 
@@ -84,7 +84,7 @@ The match is exact and case-sensitive, and there is no read equivalent — a pre
 
 ### Privacy of encrypted kinds (NIP-17, NIP-46)
 
-Kind 1059 (NIP-59 gift wraps / NIP-17 DMs) is in the default guest **write** set but not the read set, and kind 24133 (NIP-46 Nostr Connect) is in both — so anyone can send you a DM or use a bunker without authenticating, while DM content stays encrypted and gift wraps stay unreadable by guests. Gift wraps are deliberately excluded from the readable kinds as defence in depth: even if `from_tenants_only` were flipped off, the kind gate still hides them. How the policy achieves that — and the residual NIP-46 metadata trade-off it accepts — is recorded in [ADR-0007](docs/adr/0007-guest-readable-kinds-are-the-tenants-public-presence.md) (the readable-kind set), [ADR-0017](docs/adr/0017-gift-wraps-are-excluded-from-the-guest-readable-kinds.md) (the gift-wrap exclusion) and [ADR-0013](docs/adr/0013-global-read-kinds-open-nip46-connect-to-unauthenticated-signers.md) (NIP-46 Connect). **Do not add kind 1059 to `global_kinds`** — it would make gift wraps guest-readable and break the ADR-0017 privacy property.
+Kinds 1059 and 21059 (NIP-59 gift wraps and ephemeral gift wraps / NIP-17 DMs) are in the default guest **write** set but not the read set, and kind 24133 (NIP-46 Nostr Connect) is in both — so anyone can send you a DM or use a bunker without authenticating, while DM content stays encrypted and gift wraps stay unreadable by guests. Gift wraps are deliberately excluded from the readable kinds as defence in depth: even if `from_tenants_only` were flipped off, the kind gate still hides them. How the policy achieves that — and the residual NIP-46 metadata trade-off it accepts — is recorded in [ADR-0007](docs/adr/0007-guest-readable-kinds-are-the-tenants-public-presence.md) (the readable-kind set), [ADR-0036](docs/adr/0036-both-gift-wrap-kinds-are-guest-writable-and-excluded-from-the-guest-readable-kinds.md) (the gift-wrap exclusion) and [ADR-0013](docs/adr/0013-global-read-kinds-open-nip46-connect-to-unauthenticated-signers.md) (NIP-46 Connect). **Do not add kind 1059 or 21059 to `global_kinds`** — it would make gift wraps guest-readable and break the ADR-0036 privacy property. A kind 21059 gift wrap is ephemeral: the relay passes it to the recipient's open subscriptions and never stores it.
 
 ### Direct messages (NIP-17 inbox)
 
@@ -92,7 +92,7 @@ The relay works out of the box as a NIP-17 direct-message inbox for its tenant(s
 
 - **Receiving** — anyone can publish a kind 1059 gift wrap tagged to a tenant without authenticating (guest write set, `tagged_to_tenant`). NIP-59's randomised back-dated timestamps (up to two days) are accepted. A gift wrap is kept until it expires or is deleted; reading one does not remove it, so a client that fetches its inbox twice sees the same wraps.
 - **Reading your inbox** — the recipient tenant authenticates over NIP-42 and reads its `#p` mailbox. A `#p`-for-tenant subscription is scope-exceeding, so the relay issues an AUTH challenge and, once authenticated, delivers the wraps at full scope.
-- **Privacy** — no guest can read a gift wrap: the ephemeral wrapper author fails the tenant author gate, and kind 1059 is excluded from the readable kinds (see above).
+- **Privacy** — no guest can read a gift wrap: the ephemeral wrapper author fails the tenant author gate, and the gift-wrap kinds are excluded from the readable kinds (see above).
 - **Discovery** — publish a kind 10050 DM relay list naming this relay; it is guest-readable, so senders can find where to deliver your DMs.
 
 Point your kind 10050 at this relay and it becomes your DM inbox. Message confidentiality is provided entirely by NIP-17/NIP-59 client-side encryption; the relay stores ciphertext and never parses it.
@@ -113,7 +113,7 @@ Point your kind 10050 at this relay and it becomes your DM inbox. Message confid
 | 86  | Relay management API |
 | 98  | HTTP auth (management API authentication) |
 
-These are the NIPs the relay advertises in its NIP-11 document. NIP-17 is the one that follows the runtime policy: it is listed only while gift wraps are guest-writable to a tenant and not guest-readable, so a sender's client is never told to deliver mail the relay would refuse or expose (see [ADR-0033](docs/adr/0033-nip17-is-advertised-only-while-the-guest-policy-makes-the-relay-an-inbox.md)). Only a tenant can authenticate here, so in practice only a tenant can publish a NIP-70 protected event (see [ADR-0032](docs/adr/0032-a-protected-event-is-published-only-by-its-authenticated-author.md)).
+These are the NIPs the relay advertises in its NIP-11 document. NIP-17 is the one that follows the runtime policy: it is listed only while gift wraps are guest-writable to a tenant and not guest-readable, so a sender's client is never told to deliver mail the relay would refuse or expose (see [ADR-0033](docs/adr/0033-nip17-is-advertised-only-while-the-guest-policy-makes-the-relay-an-inbox.md)). Only a tenant can authenticate here, so in practice only a tenant can publish a NIP-70 protected event (see [ADR-0037](docs/adr/0037-the-nip70-author-rule-is-the-relay-librarys-and-this-policy-does-not-repeat-it.md)).
 
 ## Storage
 
@@ -149,11 +149,10 @@ composer install
 cp config/relay.example.php config/relay.php
 ```
 
-**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.1.1`) in its NIP-11 document and landing page rather than a branch ref:
+**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.2.0`) in its NIP-11 document and landing page rather than a branch ref:
 
 ```bash
-git checkout v0.1.1
-composer install --no-dev
+git checkout v0.2.0
 ```
 
 The version is read from the git state at install time: a tag checkout reports that tag, while staying on `master` (or pulling past the tag) reports `dev-master@<sha>`.
@@ -168,7 +167,7 @@ Set at least `admin_pubkey` (the bootstrap admin/tenant pubkey, as 64 hex charac
 |-----|---------|
 | `host`, `port` | Listen address (default `127.0.0.1:8080`) |
 | `connection_limits` | Transport capacity. `max_connections` caps concurrent WebSocket connections — it governs the socket, not what a connected client may ask for |
-| `limits` | Per-connection policy, enforced per request and advertised in the NIP-11 `limitation` document: `max_subscriptions`, `max_filters`, `max_limit`, `max_content_length`. `max_limit` also bounds a NIP-45 `COUNT`: the relay stops counting there and marks the reply approximate. A tenant is exempt from `max_subscriptions` and `max_filters` only. `max_limit` clamps every filter whoever asks (see [ADR-0004](docs/adr/0004-nip42-is-a-tenant-only-scope-lift-offer-not-a-connection-gate.md)), and `max_content_length` is checked before the tenant bypass (see [ADR-0031](docs/adr/0031-the-size-limit-and-the-content-blacklist-are-checked-ahead-of-the-tenant-bypass.md)), so both bind a tenant too |
+| `limits` | Per-connection policy, enforced per request: `max_subscriptions`, `max_filters`, `max_limit`, `max_content_length`, `max_filter_values`. Three are advertised in the NIP-11 `limitation` document — `max_subscriptions`, `max_limit`, `max_content_length`. NIP-11 has no field for the other two, so each is answered only by its refusal: `max_filter_values` (default 5000, at most 30000) by `blocked: too many values in one filter`, so a query never binds more values than SQLite allows (see [ADR-0038](docs/adr/0038-a-filter-holding-more-values-than-sqlite-binds-is-refused-before-it-reaches-the-store.md)), and `max_filters` by `blocked: too many filters`. `max_limit` is any positive integer and also bounds a NIP-45 `COUNT`: the relay stops counting there and marks the reply approximate. A tenant is exempt from `max_subscriptions` and `max_filters` only. `max_limit` clamps every filter whoever asks (see [ADR-0004](docs/adr/0004-nip42-is-a-tenant-only-scope-lift-offer-not-a-connection-gate.md)), and `max_content_length`, the most characters of `content` and any positive integer, is applied by the event validator to every event before the policy is asked, answered `invalid: Event content exceeds maximum length` (see [ADR-0039](docs/adr/0039-the-size-limit-is-the-event-validators-and-the-content-blacklist-is-checked-ahead.md)), so both bind a tenant too |
 | `trusted_proxies` | Proxy IPs whose forwarded-for client address is trusted (set to your reverse proxy) |
 | `name`, `description`, `contact`, `icon` | NIP-11 relay metadata defaults |
 

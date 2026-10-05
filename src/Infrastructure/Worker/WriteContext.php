@@ -13,46 +13,47 @@ use Innis\Nostr\Core\Application\Port\ClockInterface;
 use Innis\Nostr\Core\Infrastructure\Time\SystemClock;
 use PDO;
 
-final readonly class WriteContext
+final class WriteContext
 {
-    public function __construct(
-        private EventWriteStore $eventWriteStore,
-        private PolicyWriteStore $policyWriteStore,
-        private StatResultsStore $statResultsStore,
-        private ClockInterface $clock,
+    private ?StatementRunner $statements = null;
+    private ?EventWriteStore $eventWriteStore = null;
+    private ?PolicyWriteStore $policyWriteStore = null;
+    private ?StatResultsStore $statResultsStore = null;
+
+    private function __construct(
+        private readonly PDO $pdo,
+        private readonly ClockInterface $clock,
     ) {
     }
 
-    public static function forConnection(PDO $pdo): self
+    public static function forConnection(PDO $pdo, ClockInterface $clock = new SystemClock()): self
     {
-        $clock = new SystemClock();
-        $statements = new StatementRunner($pdo);
-
-        return new self(
-            new EventWriteStore($pdo, $statements, new Denormaliser($statements)),
-            new PolicyWriteStore($pdo, $clock),
-            new StatResultsStore($statements),
-            $clock,
-        );
+        return new self($pdo, $clock);
     }
 
     public function getEventWriteStore(): EventWriteStore
     {
-        return $this->eventWriteStore;
+        return $this->eventWriteStore ??= new EventWriteStore($this->pdo, $this->statements(), new Denormaliser($this->statements()));
     }
 
     public function getPolicyWriteStore(): PolicyWriteStore
     {
-        return $this->policyWriteStore;
+        return $this->policyWriteStore ??= new PolicyWriteStore($this->pdo, $this->clock);
     }
 
     public function getStatResultsStore(): StatResultsStore
     {
-        return $this->statResultsStore;
+        return $this->statResultsStore ??= new StatResultsStore($this->statements());
     }
 
     public function getClock(): ClockInterface
     {
         return $this->clock;
+    }
+
+    private function statements(): StatementRunner
+    {
+        // Deliberate: one runner per connection, shared by the stores this context vends, so a prepared statement is cached once for the life of the connection — see ADR-0020
+        return $this->statements ??= new StatementRunner($this->pdo);
     }
 }

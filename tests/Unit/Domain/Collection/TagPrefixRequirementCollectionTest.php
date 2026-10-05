@@ -84,6 +84,6 @@ final class TagPrefixRequirementCollectionTest extends TestCase
 
     private function tags(string $name, string $value): TagCollection
     {
-        return new TagCollection([Tag::create($name, $value)]);
+        return new TagCollection([Tag::fromArray([$name, $value])]);
     }
 }

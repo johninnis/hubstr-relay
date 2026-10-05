@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Innis\Hubstr\Relay\Domain\ValueObject;
 
-use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
-use Innis\Nostr\Relay\Domain\Service\SubscriptionLimits;
+use Innis\Nostr\Core\Domain\ValueObject\EventLimits;
+use Innis\Nostr\Relay\Domain\ValueObject\SubscriptionLimits;
 use InvalidArgumentException;
 
 final readonly class RelayLimits
@@ -15,15 +15,20 @@ final readonly class RelayLimits
         private int $maxFilters,
         private int $maxLimit,
         private int $maxContentLength,
+        private int $maxFilterValues,
     ) {
-        foreach (['max_subscriptions' => $maxSubscriptions, 'max_filters' => $maxFilters, 'max_content_length' => $maxContentLength] as $name => $value) {
+        $limits = [
+            'max_subscriptions' => $maxSubscriptions,
+            'max_filters' => $maxFilters,
+            'max_limit' => $maxLimit,
+            'max_content_length' => $maxContentLength,
+            'max_filter_values' => $maxFilterValues,
+        ];
+
+        foreach ($limits as $name => $value) {
             if ($value < 1) {
                 throw new InvalidArgumentException(sprintf('limits.%s must be a positive integer, got %d', $name, $value));
             }
-        }
-
-        if (!SubscriptionLimits::isQueryLimitInRange($maxLimit)) {
-            throw new InvalidArgumentException(sprintf('limits.max_limit must be between %d and %d, got %d', SubscriptionLimits::MIN_QUERY_LIMIT, Filter::MAX_LIMIT, $maxLimit));
         }
     }
 
@@ -34,6 +39,7 @@ final readonly class RelayLimits
             maxFilters: 5,
             maxLimit: 1000,
             maxContentLength: 65536,
+            maxFilterValues: 5000,
         );
     }
 
@@ -57,8 +63,18 @@ final readonly class RelayLimits
         return $this->maxContentLength;
     }
 
+    public function getMaxFilterValues(): int
+    {
+        return $this->maxFilterValues;
+    }
+
     public function toSubscriptionLimits(): SubscriptionLimits
     {
-        return new SubscriptionLimits($this->maxSubscriptions, $this->maxFilters, $this->maxLimit);
+        return new SubscriptionLimits($this->maxSubscriptions, $this->maxFilters, $this->maxLimit, $this->maxFilterValues);
+    }
+
+    public function toEventLimits(): EventLimits
+    {
+        return new EventLimits(maxContentLength: $this->maxContentLength);
     }
 }

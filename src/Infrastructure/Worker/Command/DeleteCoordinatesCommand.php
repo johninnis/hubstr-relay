@@ -8,6 +8,7 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\WriteCommandInterface;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteContext;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
+use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Override;
 
 final readonly class DeleteCoordinatesCommand implements WriteCommandInterface
@@ -15,12 +16,13 @@ final readonly class DeleteCoordinatesCommand implements WriteCommandInterface
     public function __construct(
         private EventCoordinateCollection $coordinates,
         private PublicKey $author,
+        private Timestamp $until,
     ) {
     }
 
     #[Override]
     public function applyTo(WriteContext $context): mixed
     {
-        return $context->getEventWriteStore()->deleteByCoordinates($this->coordinates, $this->author);
+        return $context->getEventWriteStore()->deleteByCoordinates($this->coordinates, $this->author, $this->until);
     }
 }

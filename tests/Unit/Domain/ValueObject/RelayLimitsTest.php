@@ -15,53 +15,50 @@ final class RelayLimitsTest extends TestCase
 {
     public function testTheDefaultsAreWithinTheRangeTheRelayCanApply(): void
     {
-        $this->assertSame(1000, RelayLimits::defaults()->getMaxLimit());
+        $defaults = RelayLimits::defaults();
+
+        $this->assertSame([1000, 5000], [$defaults->getMaxLimit(), $defaults->getMaxFilterValues()]);
     }
 
-    #[DataProvider('maxLimitsOutsideTheFilterRange')]
-    public function testAMaxLimitAFilterCannotCarryIsRefused(int $maxLimit): void
+    public function testAMaxLimitAboveFiveThousandIsTheRelaysToChoose(): void
     {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('limits.max_limit');
-
-        new RelayLimits(20, 5, $maxLimit, 65536);
-    }
-
-    /**
-     * @return iterable<string, array{int}>
-     */
-    public static function maxLimitsOutsideTheFilterRange(): iterable
-    {
-        yield 'zero reads nothing' => [0];
-        yield 'negative' => [-1];
-        yield 'above what a filter accepts' => [Filter::MAX_LIMIT + 1];
+        $this->assertSame(10_000, new RelayLimits(20, 5, 10_000, 65536, 5000)->getMaxLimit());
     }
 
     #[DataProvider('nonPositiveLimits')]
-    public function testEveryOtherLimitMustBePositive(int $maxSubscriptions, int $maxFilters, int $maxContentLength, string $named): void
+    public function testEveryLimitMustBePositive(int $maxSubscriptions, int $maxFilters, int $maxLimit, int $maxContentLength, int $maxFilterValues, string $named): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('limits.'.$named.' must be a positive integer');
 
-        new RelayLimits($maxSubscriptions, $maxFilters, 1000, $maxContentLength);
+        new RelayLimits($maxSubscriptions, $maxFilters, $maxLimit, $maxContentLength, $maxFilterValues);
     }
 
     /**
-     * @return iterable<string, array{int, int, int, string}>
+     * @return iterable<string, array{int, int, int, int, int, string}>
      */
     public static function nonPositiveLimits(): iterable
     {
-        yield 'no subscriptions' => [0, 5, 65536, 'max_subscriptions'];
-        yield 'no filters' => [20, 0, 65536, 'max_filters'];
-        yield 'no content' => [20, 5, 0, 'max_content_length'];
+        yield 'no subscriptions' => [0, 5, 1000, 65536, 5000, 'max_subscriptions'];
+        yield 'no filters' => [20, 0, 1000, 65536, 5000, 'max_filters'];
+        yield 'a limit that reads nothing' => [20, 5, 0, 65536, 5000, 'max_limit'];
+        yield 'a negative limit' => [20, 5, -1, 65536, 5000, 'max_limit'];
+        yield 'no content' => [20, 5, 1000, 0, 5000, 'max_content_length'];
+        yield 'no filter values' => [20, 5, 1000, 65536, 0, 'max_filter_values'];
     }
 
     public function testTheSubscriptionLimitsCarryTheSameCeilings(): void
     {
-        $limits = new RelayLimits(2, 1, 50, 65536);
+        $limits = new RelayLimits(2, 1, 50, 65536, 1)->toSubscriptionLimits();
 
-        $rejection = $limits->toSubscriptionLimits()->enforce(2, new FilterCollection());
+        $this->assertNotNull($limits->enforce(2, new FilterCollection()));
+        $this->assertNotNull($limits->refuseOversizedFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1, 2]]) ?? self::fail('filter did not parse')])));
+    }
 
-        $this->assertNotNull($rejection);
+    public function testTheEventLimitsCarryTheConfiguredContentLength(): void
+    {
+        $limits = new RelayLimits(2, 1, 50, 100_000, 1)->toEventLimits();
+
+        $this->assertSame([true, false], [$limits->admitsContentLength(100_000), $limits->admitsContentLength(100_001)]);
     }
 }

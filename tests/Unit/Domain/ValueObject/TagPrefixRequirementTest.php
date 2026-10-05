@@ -33,8 +33,8 @@ final class TagPrefixRequirementTest extends TestCase
     public function testSatisfiedWhenTheEventCarriesSeveralTagsAndOneMatches(): void
     {
         $tags = new TagCollection([
-            Tag::create('I', 'https://example.com/elsewhere'),
-            Tag::create('I', self::SITE.'john/3/16'),
+            Tag::fromArray(['I', 'https://example.com/elsewhere']),
+            Tag::fromArray(['I', self::SITE.'john/3/16']),
         ]);
 
         $this->assertTrue($this->requirement()->isSatisfiedBy($tags));
@@ -126,6 +126,6 @@ final class TagPrefixRequirementTest extends TestCase
 
     private function tags(string $name, string $value): TagCollection
     {
-        return new TagCollection([Tag::create($name, $value)]);
+        return new TagCollection([Tag::fromArray([$name, $value])]);
     }
 }

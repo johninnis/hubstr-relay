@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use Innis\Hubstr\Relay\Infrastructure\Config\RelayConfig;
+use Innis\Hubstr\Relay\Infrastructure\Config\RelayConfigLoader;
 use Innis\Hubstr\Relay\Presentation\Cli\ExportOptionFailure;
 use Innis\Hubstr\Relay\Presentation\Cli\ExportOptions;
 use Innis\Hubstr\Relay\RelayContainer;
@@ -16,7 +16,7 @@ if ($criteria instanceof ExportOptionFailure) {
     exit(2);
 }
 
-$useCase = new RelayContainer(RelayConfig::load(dirname(__DIR__).'/config/relay.php'))->exportEventsUseCase();
+$useCase = new RelayContainer(new RelayConfigLoader()->load(dirname(__DIR__).'/config/relay.php'))->exportEventsUseCase();
 
 $count = 0;
 foreach ($useCase->export($criteria) as $json) {

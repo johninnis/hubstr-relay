@@ -67,6 +67,7 @@ final class PolicyReadStoreTest extends TestCase
         yield 'truncated JSON' => ['{"read": '];
         yield 'a scalar' => ['42'];
         yield 'a list' => ['[1, 2]'];
+        yield 'the empty list' => ['[]'];
     }
 
     private function save(SettingKey $key, string $value): void

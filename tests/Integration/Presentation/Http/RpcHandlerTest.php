@@ -44,6 +44,7 @@ use Innis\Nostr\Core\Application\Service\Nip98Validator;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
 use Innis\Nostr\Core\Domain\Collection\TagCollection;
 use Innis\Nostr\Core\Domain\Enum\SubscriptionState;
+use Innis\Nostr\Core\Domain\Service\Nip98EventChecker;
 use Innis\Nostr\Core\Domain\Service\SignatureServiceInterface;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventContent;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
@@ -94,8 +95,8 @@ final class RpcHandlerTest extends TestCase
         $this->policyManagement = new WriteThroughPolicyManagement($this->policyState, $writeCoordinator);
         $this->policyManagement->addTenant($this->tenantKeyPair->getPublicKey());
 
-        $relayUrl = RelayUrl::tryFromString('wss://relay.example.com') ?? throw new RuntimeException('Invalid URL');
-        $nip98Validator = new Nip98Validator($this->signatureService(), new InMemoryNip98ReplayGuard(new SystemClock()), new SystemClock());
+        $relayUrl = RelayUrl::fromString('wss://relay.example.com');
+        $nip98Validator = new Nip98Validator(new Nip98EventChecker($this->signatureService()), new InMemoryNip98ReplayGuard(new SystemClock()), new SystemClock());
         $this->eventWriteStore = WriteContext::forConnection($this->pdo)->getEventWriteStore();
         $exploreQuery = new SqliteExploreQuery($this->pdo);
         $webOfTrustQuery = new SqliteWebOfTrustQuery($this->pdo);
@@ -128,8 +129,8 @@ final class RpcHandlerTest extends TestCase
 
         new RpcHandler(
             new TenantAuthenticator(
-                new Nip98Validator($this->signatureService(), new InMemoryNip98ReplayGuard(new SystemClock()), new SystemClock()),
-                RelayUrl::tryFromString('wss://relay.example.com') ?? throw new RuntimeException('Invalid URL'),
+                new Nip98Validator(new Nip98EventChecker($this->signatureService()), new InMemoryNip98ReplayGuard(new SystemClock()), new SystemClock()),
+                RelayUrl::fromString('wss://relay.example.com'),
                 $this->policyState,
             ),
             [$tenancyHandler, $tenancyHandler],
@@ -144,6 +145,19 @@ final class RpcHandlerTest extends TestCase
 
         $this->assertNotNull($response);
         $this->assertSame(HttpStatus::UNAUTHORIZED, $response->getStatus());
+    }
+
+    public function testARejectionCarriesTheMessageAsTheReasonHeader(): void
+    {
+        $request = $this->createRpcRequest('{"method":"supportedmethods"}');
+
+        $response = $this->handler->handleRequest($request);
+
+        $this->assertNotNull($response);
+        $this->assertSame(
+            $this->decodeResponse($response)['error'],
+            $response->getHeader('x-reason'),
+        );
     }
 
     public function testRejectsNonTenantPubkey(): void
@@ -215,6 +229,14 @@ final class RpcHandlerTest extends TestCase
         $this->assertContains('allowpubkey', $data['result']);
         $this->assertContains('banword', $data['result']);
         $this->assertContains('getstats', $data['result']);
+    }
+
+    public function testSupportedMethodsListsEveryMethodButItself(): void
+    {
+        $response = $this->authenticatedRpc('{"method":"supportedmethods"}');
+
+        $data = $this->decodeResponse($response);
+        $this->assertNotContains('supportedmethods', self::arr($data['result']));
     }
 
     public function testListAllowedPubkeys(): void
@@ -533,12 +555,11 @@ final class RpcHandlerTest extends TestCase
     public function testGetWotScoreReturnsScoreForAuthenticatedUser(): void
     {
         $target = KeyPair::generate($this->signatureService());
-        $followEvent = new Rumour(
+        $followEvent = Rumour::draft(
             $this->tenantKeyPair->getPublicKey(),
-            Timestamp::now(),
             EventKind::fromInt(EventKind::FOLLOW_LIST),
-            new TagCollection([Tag::tryFromArray(['p', $target->getPublicKey()->toHex()])]),
             EventContent::empty(),
+            new TagCollection([Tag::tryFromArray(['p', $target->getPublicKey()->toHex()])]),
         )->sign($this->tenantKeyPair, $this->signatureService());
         $this->eventWriteStore->store($followEvent);
 
@@ -625,17 +646,16 @@ final class RpcHandlerTest extends TestCase
         $payloadHash = hash('sha256', $body);
         $nonce = bin2hex(random_bytes(8));
 
-        $rumour = new Rumour(
+        $rumour = Rumour::draft(
             $keyPair->getPublicKey(),
-            Timestamp::now(),
             EventKind::fromInt(EventKind::HTTP_AUTH),
+            EventContent::empty(),
             new TagCollection([
                 Tag::tryFromArray(['u', 'https://relay.example.com']),
                 Tag::tryFromArray(['method', 'POST']),
                 Tag::tryFromArray(['payload', $payloadHash]),
                 Tag::tryFromArray(['nonce', $nonce]),
             ]),
-            EventContent::empty()
         );
 
         $signed = $rumour->sign($keyPair, $this->signatureService());
@@ -651,8 +671,8 @@ final class RpcHandlerTest extends TestCase
 
     private function createHandlerWithRelayState(RelayStateInterface $relayState): RpcHandler
     {
-        $relayUrl = RelayUrl::tryFromString('wss://relay.example.com') ?? throw new RuntimeException('Invalid URL');
-        $nip98Validator = new Nip98Validator($this->signatureService(), new InMemoryNip98ReplayGuard(new SystemClock()), new SystemClock());
+        $relayUrl = RelayUrl::fromString('wss://relay.example.com');
+        $nip98Validator = new Nip98Validator(new Nip98EventChecker($this->signatureService()), new InMemoryNip98ReplayGuard(new SystemClock()), new SystemClock());
         $exploreQuery = new SqliteExploreQuery($this->pdo);
         $webOfTrustQuery = new SqliteWebOfTrustQuery($this->pdo);
 

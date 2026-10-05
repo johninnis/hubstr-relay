@@ -10,6 +10,8 @@ use Innis\Hubstr\Relay\Domain\Enum\ExplorePeriod;
 use Innis\Hubstr\Relay\Domain\Enum\StatName;
 use Innis\Hubstr\Relay\Infrastructure\Stats\RefreshExploreStatTask;
 use Innis\Hubstr\Relay\Infrastructure\Stats\RefreshTotalsTask;
+use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshPipeline;
+use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshRotation;
 use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshSchedule;
 use Innis\Hubstr\Relay\Infrastructure\Stats\StatsRefreshScheduler;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteCoordinator;
@@ -35,10 +37,8 @@ final class StatsRefreshSchedulerTest extends TestCase
     {
         $this->pool = new FakeWorkerPool();
         $this->scheduler = new StatsRefreshScheduler(
-            $this->pool,
-            StatsRefreshSchedule::forDatabase(SqliteDatabase::atPath(self::DATABASE_PATH)),
-            new WriteCoordinator(new QueueChannel()),
-            new NullLogger(),
+            new StatsRefreshRotation(StatsRefreshSchedule::forDatabase(SqliteDatabase::atPath(self::DATABASE_PATH))),
+            new StatsRefreshPipeline($this->pool, new WriteCoordinator(new QueueChannel()), new NullLogger()),
         );
     }
 
@@ -115,10 +115,8 @@ final class StatsRefreshSchedulerTest extends TestCase
         $testHandler = new TestHandler();
         $logger = new Logger('test', [$testHandler]);
         $scheduler = new StatsRefreshScheduler(
-            $this->pool,
-            StatsRefreshSchedule::forDatabase(SqliteDatabase::atPath(self::DATABASE_PATH)),
-            new WriteCoordinator(new QueueChannel()),
-            $logger,
+            new StatsRefreshRotation(StatsRefreshSchedule::forDatabase(SqliteDatabase::atPath(self::DATABASE_PATH))),
+            new StatsRefreshPipeline($this->pool, new WriteCoordinator(new QueueChannel()), $logger),
         );
 
         $this->runInLoop(function () use ($scheduler, $testHandler): void {

@@ -25,21 +25,21 @@
         "amphp/socket": "^2",
         "amphp/sync": "^2",
         "innis/hubstr-core": "^0.2",
-        "innis/nostr-core": "^0.8",
-        "innis/nostr-relay": "^0.9",
+        "innis/nostr-core": "^0.9",
+        "innis/nostr-relay": "^0.10",
         "psr/log": "^3.0",
         "revolt/event-loop": "^1"
     },
     "require-dev": {
         "ext-ffi": "*",
         "friendsofphp/php-cs-fixer": "^3.95",
-        "innis/coding-standards": "^0.1",
+        "innis/coding-standards": "^0.2",
         "league/uri": "^7",
         "monolog/monolog": "^3.10",
         "phpstan/phpstan": "~2.2.6",
         "phpstan/phpstan-phpunit": "^2.0",
         "phpunit/phpunit": "^13.1",
-        "rector/rector": "~2.5.9"
+        "rector/rector": "~2.6.7"
     },
     "autoload": {
         "psr-4": {

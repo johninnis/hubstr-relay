@@ -14,6 +14,8 @@ We record architecture decisions in this directory, one immutable file per decis
 
 Until the first tagged release, every record is kept true to the code by editing it in place: a record that describes anything other than the codebase as it stands is wrong, and there is no published history for a supersession chain to protect. From the first tagged release onward a record is never edited to change its decision; it is superseded by a new record, and its Status is set to `Superseded by ADR-NNNN`.
 
+A record's filename is its four-digit number and a kebab-case slug of its title, at most 95 characters including the `.md` extension, the longest path component JSR accepts. A longer title is shortened in the filename, never in the record's heading.
+
 ## Consequences
 
 - The reasoning behind each decision is preserved alongside the code and survives the people who made it.

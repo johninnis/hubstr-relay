@@ -13,6 +13,7 @@ final readonly class CorsHeaders
         'access-control-allow-origin' => '*',
         'access-control-allow-methods' => 'GET, POST, OPTIONS',
         'access-control-allow-headers' => 'Content-Type, Authorization',
+        'access-control-expose-headers' => 'X-Reason',
         'access-control-max-age' => '86400',
     ];
 

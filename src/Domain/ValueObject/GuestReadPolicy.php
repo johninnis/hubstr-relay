@@ -9,7 +9,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 
 final readonly class GuestReadPolicy
 {
-    // Deliberate: kind 1059 is absent here and from the global kinds below — gift wraps are guest-writable, never guest-readable. See ADR-0017.
+    // Deliberate: kinds 1059 and 21059 are absent here and from the global kinds below — gift wraps are guest-writable, never guest-readable — see ADR-0036
     private const array DEFAULT_KINDS = [
         EventKind::METADATA,
         EventKind::TEXT_NOTE,

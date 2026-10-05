@@ -63,6 +63,20 @@ final class StatPayloadCodecTest extends TestCase
         $this->codec->decodeEntries(StatName::TrendingHashtags, '42');
     }
 
+    public function testDecodeEntriesRejectsAJsonObject(): void
+    {
+        $this->expectException(MalformedStatPayloadException::class);
+
+        $this->codec->decodeEntries(StatName::TrendingHashtags, '{"a":{"hashtag":"nostr","count":1}}');
+    }
+
+    public function testDecodeEntriesRejectsAnObjectKeyedLikeAList(): void
+    {
+        $this->expectException(MalformedStatPayloadException::class);
+
+        $this->codec->decodeEntries(StatName::TrendingHashtags, '{"0":{"hashtag":"nostr","count":1}}');
+    }
+
     public function testDecodeEntriesRejectsMalformedJson(): void
     {
         $this->expectException(MalformedStatPayloadException::class);
@@ -96,5 +110,12 @@ final class StatPayloadCodecTest extends TestCase
         $this->expectException(MalformedStatPayloadException::class);
 
         $this->codec->decodeTotals('42');
+    }
+
+    public function testDecodeTotalsRejectsAJsonArray(): void
+    {
+        $this->expectException(MalformedStatPayloadException::class);
+
+        $this->codec->decodeTotals('[]');
     }
 }

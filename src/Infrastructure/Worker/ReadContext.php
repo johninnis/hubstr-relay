@@ -10,43 +10,40 @@ use Innis\Hubstr\Relay\Infrastructure\Persistence\SqliteStatsProvider;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\SqliteWebOfTrustQuery;
 use PDO;
 
-final readonly class ReadContext
+final class ReadContext
 {
-    public function __construct(
-        private EventQueryStore $eventQueryStore,
-        private SqliteStatsProvider $statsProvider,
-        private SqliteExploreQuery $exploreQuery,
-        private SqliteWebOfTrustQuery $webOfTrustQuery,
+    private ?EventQueryStore $eventQueryStore = null;
+    private ?SqliteStatsProvider $statsProvider = null;
+    private ?SqliteExploreQuery $exploreQuery = null;
+    private ?SqliteWebOfTrustQuery $webOfTrustQuery = null;
+
+    private function __construct(
+        private readonly PDO $pdo,
     ) {
     }
 
     public static function forConnection(PDO $pdo): self
     {
-        return new self(
-            new EventQueryStore($pdo),
-            new SqliteStatsProvider($pdo),
-            new SqliteExploreQuery($pdo),
-            new SqliteWebOfTrustQuery($pdo),
-        );
+        return new self($pdo);
     }
 
     public function getEventQueryStore(): EventQueryStore
     {
-        return $this->eventQueryStore;
+        return $this->eventQueryStore ??= new EventQueryStore($this->pdo);
     }
 
     public function getStatsProvider(): SqliteStatsProvider
     {
-        return $this->statsProvider;
+        return $this->statsProvider ??= new SqliteStatsProvider($this->pdo);
     }
 
     public function getExploreQuery(): SqliteExploreQuery
     {
-        return $this->exploreQuery;
+        return $this->exploreQuery ??= new SqliteExploreQuery($this->pdo);
     }
 
     public function getWebOfTrustQuery(): SqliteWebOfTrustQuery
     {
-        return $this->webOfTrustQuery;
+        return $this->webOfTrustQuery ??= new SqliteWebOfTrustQuery($this->pdo);
     }
 }

@@ -41,7 +41,7 @@ final readonly class Nip11InfoProvider implements Nip11InfoProviderInterface
      */
     private function supportedNips(): array
     {
-        $nips = array_values(array_filter($this->base->getSupportedNips() ?? [], is_int(...)));
+        $nips = $this->base->getSupportedNips() ?? [];
 
         if ($this->policyState->getGuestPolicy()->servesAsDirectMessageInbox()) {
             $nips[] = self::DIRECT_MESSAGE_INBOX_NIP;
@@ -59,7 +59,6 @@ final readonly class Nip11InfoProvider implements Nip11InfoProviderInterface
     {
         return [
             'max_subscriptions' => $this->limits->getMaxSubscriptions(),
-            'max_filters' => $this->limits->getMaxFilters(),
             'max_limit' => $this->limits->getMaxLimit(),
             'max_content_length' => $this->limits->getMaxContentLength(),
             'auth_required' => false,

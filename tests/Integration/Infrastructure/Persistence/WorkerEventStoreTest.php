@@ -15,12 +15,14 @@ use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
-use Innis\Nostr\Core\Domain\Entity\Event;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\KeyPair;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
+use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
+use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
+use Innis\Nostr\Relay\Domain\ValueObject\StoredEvent;
 use PHPUnit\Framework\TestCase;
 
 use function Amp\async;
@@ -71,7 +73,7 @@ final class WorkerEventStoreTest extends TestCase
             100,
         );
 
-        $deleted = async(static fn () => $store->deleteByCoordinates(new EventCoordinateCollection([]), SignedEventFactory::pubkey('aa')))->await();
+        $deleted = async(static fn () => $store->deleteByCoordinates(new EventCoordinateCollection([]), SignedEventFactory::pubkey('aa'), Timestamp::fromInt(0)))->await();
 
         self::assertSame(0, $deleted);
     }
@@ -79,7 +81,8 @@ final class WorkerEventStoreTest extends TestCase
     public function testFindByFiltersQueriesTheReadPool(): void
     {
         $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'hello');
-        $readChannel = new QueueChannel([[$event->toJson()]]);
+        $stored = new StoredEventCollection([StoredEvent::of($event)]);
+        $readChannel = new QueueChannel([$stored]);
         $store = new WorkerEventStore(
             new WriteCoordinator(new QueueChannel()),
             new ReadWorkerPool([$readChannel]),
@@ -88,26 +91,8 @@ final class WorkerEventStoreTest extends TestCase
 
         $result = $store->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]));
 
-        self::assertCount(1, $result);
-        $first = $result->first();
-        self::assertInstanceOf(Event::class, $first);
-        self::assertSame($event->getId()->toHex(), $first->getId()->toHex());
-        self::assertSame($event->toJson(), $first->getRawJson());
+        self::assertSame($stored, $result);
         self::assertInstanceOf(FindByFiltersQuery::class, $readChannel->sent[0]);
-    }
-
-    public function testFindByFiltersThrowsOnAnUnparseableStoredEvent(): void
-    {
-        $store = new WorkerEventStore(
-            new WriteCoordinator(new QueueChannel()),
-            new ReadWorkerPool([new QueueChannel([['{not valid json']])]),
-            100,
-        );
-
-        $this->expectException(WorkerResultException::class);
-        $this->expectExceptionMessage('unparseable stored event');
-
-        $store->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]));
     }
 
     public function testCountByFiltersQueriesTheReadPool(): void
@@ -125,7 +110,7 @@ final class WorkerEventStoreTest extends TestCase
         self::assertInstanceOf(CountByFiltersQuery::class, $readChannel->sent[0]);
     }
 
-    public function testFindByFiltersThrowsWhenTheWorkerResultIsNotAnArray(): void
+    public function testFindByFiltersThrowsWhenTheWorkerResultIsNotStoredEvents(): void
     {
         $store = new WorkerEventStore(
             new WriteCoordinator(new QueueChannel()),

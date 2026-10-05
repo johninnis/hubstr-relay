@@ -16,22 +16,21 @@ use Innis\Nostr\Core\Domain\ValueObject\Payment\ZapReceipt;
 use Innis\Nostr\Relay\Application\Port\RelayPolicyInterface;
 use Innis\Nostr\Relay\Application\Service\AuthenticatedSessionsInterface;
 use Innis\Nostr\Relay\Domain\Entity\RelayClient;
-use Innis\Nostr\Relay\Domain\Service\SubscriptionLimits;
+use Innis\Nostr\Relay\Domain\ValueObject\EventHeader;
 use Innis\Nostr\Relay\Domain\ValueObject\PolicyRejection;
 use Innis\Nostr\Relay\Domain\ValueObject\ScopedFilters;
+use Innis\Nostr\Relay\Domain\ValueObject\SubscriptionLimits;
 use Override;
 
 // Deliberate: a host implementation of the port, not a reuse of the library's static-config RelayPolicy — see ADR-0023
 final readonly class HubstrPolicy implements RelayPolicyInterface
 {
-    private const string PROTECTED_EVENT_REASON = 'this event may only be published by its author';
-
     private SubscriptionLimits $subscriptionLimits;
 
     public function __construct(
         private PolicyStateInterface $policyState,
         private AuthenticatedSessionsInterface $authenticatedSessions,
-        private RelayLimits $limits,
+        RelayLimits $limits,
     ) {
         $this->subscriptionLimits = $limits->toSubscriptionLimits();
     }
@@ -39,10 +38,6 @@ final readonly class HubstrPolicy implements RelayPolicyInterface
     #[Override]
     public function allowEventSubmission(RelayClient $client, Event $event): ?PolicyRejection
     {
-        if ($event->getContent()->getLength() > $this->limits->getMaxContentLength()) {
-            return PolicyRejection::blocked('event too large');
-        }
-
         if ($this->policyState->isEventBlacklisted($event)) {
             return PolicyRejection::blocked('event rejected by content filter');
         }
@@ -58,13 +53,6 @@ final readonly class HubstrPolicy implements RelayPolicyInterface
 
         $authenticatedPubkeys = $this->authenticatedSessions->getAuthenticatedPubkeys($client->getId());
         $authenticated = !$authenticatedPubkeys->isEmpty();
-
-        // Deliberate: ahead of the tenant bypass, because a protected event may be published only by its author, whoever relays it — see ADR-0032
-        if ($event->isProtected() && !$authenticatedPubkeys->contains($event->getPubkey())) {
-            return $authenticated
-                ? PolicyRejection::blocked(self::PROTECTED_EVENT_REASON)
-                : PolicyRejection::authRequired(self::PROTECTED_EVENT_REASON);
-        }
 
         if ($this->holdsATenant($authenticatedPubkeys) || $this->isEventFromTenant($event)) {
             return null;
@@ -127,11 +115,9 @@ final readonly class HubstrPolicy implements RelayPolicyInterface
     #[Override]
     public function allowSubscription(RelayClient $client, FilterCollection $filters, int $currentSubscriptionCount): ?PolicyRejection
     {
-        if ($this->isTenant($client)) {
-            return null;
-        }
-
-        return $this->subscriptionLimits->enforce($currentSubscriptionCount, $filters);
+        // Deliberate: the per-filter value ceiling keeps a query within what SQLite can bind and binds a tenant too; only the concurrency caps are a tenant's to escape — see ADR-0038
+        return $this->subscriptionLimits->refuseOversizedFilters($filters)
+            ?? ($this->isTenant($client) ? null : $this->subscriptionLimits->enforce($currentSubscriptionCount, $filters));
     }
 
     #[Override]
@@ -148,7 +134,7 @@ final readonly class HubstrPolicy implements RelayPolicyInterface
     }
 
     #[Override]
-    public function canClientReceiveEvent(RelayClient $client, Event $event): bool
+    public function canClientReceiveEvent(RelayClient $client, EventHeader $event): bool
     {
         if ($this->isTenant($client)) {
             return true;

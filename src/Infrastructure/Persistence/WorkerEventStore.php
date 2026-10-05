@@ -4,21 +4,21 @@ declare(strict_types=1);
 
 namespace Innis\Hubstr\Relay\Infrastructure\Persistence;
 
-use Innis\Hubstr\Relay\Domain\Exception\WorkerResultException;
 use Innis\Hubstr\Relay\Infrastructure\Worker\Command\DeleteCoordinatesCommand;
 use Innis\Hubstr\Relay\Infrastructure\Worker\Command\DeleteEventIdsCommand;
 use Innis\Hubstr\Relay\Infrastructure\Worker\Query\CountByFiltersQuery;
 use Innis\Hubstr\Relay\Infrastructure\Worker\Query\FindByFiltersQuery;
 use Innis\Hubstr\Relay\Infrastructure\Worker\ReadWorkerPool;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteCoordinator;
-use Innis\Nostr\Core\Domain\Collection\EventCollection;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
 use Innis\Nostr\Core\Domain\Entity\Event;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
+use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Relay\Application\Port\RelayEventStoreInterface;
+use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
 use Override;
 
@@ -38,20 +38,9 @@ final readonly class WorkerEventStore implements RelayEventStoreInterface
     }
 
     #[Override]
-    public function findByFilters(FilterCollection $filters): EventCollection
+    public function findByFilters(FilterCollection $filters): StoredEventCollection
     {
-        $events = [];
-
-        foreach ($this->readPool->queryForList(new FindByFiltersQuery($filters)) as $rawEvent) {
-            if (!is_string($rawEvent)) {
-                throw new WorkerResultException('Event store worker returned a non-string stored event');
-            }
-
-            $events[] = Event::tryFromJson($rawEvent)
-                ?? throw new WorkerResultException('Event store worker returned an unparseable stored event');
-        }
-
-        return new EventCollection($events);
+        return $this->readPool->queryForInstance(new FindByFiltersQuery($filters), StoredEventCollection::class);
     }
 
     #[Override]
@@ -67,8 +56,8 @@ final readonly class WorkerEventStore implements RelayEventStoreInterface
     }
 
     #[Override]
-    public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author): int
+    public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author, Timestamp $until): int
     {
-        return $this->writeCoordinator->applyForInt(new DeleteCoordinatesCommand($coordinates, $author));
+        return $this->writeCoordinator->applyForInt(new DeleteCoordinatesCommand($coordinates, $author, $until));
     }
 }

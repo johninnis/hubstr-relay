@@ -18,7 +18,6 @@ use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Rumour;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\Hashtag;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\Tag;
-use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -109,12 +108,11 @@ final class BlacklistFilterTest extends TestCase
 
     private function createEvent(string $content, ?PublicKey $pubkey = null, ?TagCollection $tags = null): Event
     {
-        return SignedEventFactory::fromRumour(new Rumour(
+        return SignedEventFactory::fromRumour(Rumour::draft(
             $pubkey ?? self::pubkey('cc'),
-            Timestamp::now(),
             EventKind::fromInt(EventKind::TEXT_NOTE),
+            EventContent::fromString($content),
             $tags ?? new TagCollection(),
-            EventContent::fromString($content)
         ));
     }
 

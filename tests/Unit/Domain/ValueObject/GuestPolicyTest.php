@@ -82,6 +82,7 @@ final class GuestPolicyTest extends TestCase
                 EventKind::NUTZAP,
                 EventKind::ZAP_RECEIPT,
                 EventKind::GIFT_WRAP,
+                EventKind::EPHEMERAL_GIFT_WRAP,
                 EventKind::NOSTR_CONNECT,
             ],
             $policy->getWrite()->getKinds()->toInts(),
@@ -100,26 +101,37 @@ final class GuestPolicyTest extends TestCase
         $this->assertFalse($read->getGlobalKinds()->contains(EventKind::fromInt(EventKind::TEXT_NOTE)));
     }
 
-    public function testGiftWrapsAreGuestWritableButNeverGuestReadable(): void
+    #[DataProvider('giftWrapKinds')]
+    public function testGiftWrapsAreGuestWritableButNeverGuestReadable(int $kind): void
     {
         $policy = GuestPolicy::defaults();
-        $giftWrap = EventKind::fromInt(EventKind::GIFT_WRAP);
+        $giftWrap = EventKind::fromInt($kind);
 
         $this->assertTrue($policy->getWrite()->getKinds()->contains($giftWrap));
         $this->assertFalse(
             $policy->getRead()->getKinds()->contains($giftWrap),
             'The kind gate must hide gift wraps independently of the author gate, so that flipping '
-            .'from_tenants_only off cannot expose stored direct messages (ADR-0017).',
+            .'from_tenants_only off cannot expose direct messages (ADR-0036).',
         );
     }
 
-    public function testGiftWrapsAreNeverAGlobalKind(): void
+    #[DataProvider('giftWrapKinds')]
+    public function testGiftWrapsAreNeverAGlobalKind(int $kind): void
     {
         $this->assertFalse(
-            GuestPolicy::defaults()->getRead()->getGlobalKinds()->contains(EventKind::fromInt(EventKind::GIFT_WRAP)),
-            'A global kind bypasses the author gate as well as counting as readable, so kind 1059 there '
-            .'would defeat both gift-wrap gates at once (ADR-0017).',
+            GuestPolicy::defaults()->getRead()->getGlobalKinds()->contains(EventKind::fromInt($kind)),
+            'A global kind bypasses the author gate as well as counting as readable, so a gift wrap there '
+            .'would defeat both gift-wrap gates at once (ADR-0036).',
         );
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function giftWrapKinds(): iterable
+    {
+        yield 'kind 1059' => [EventKind::GIFT_WRAP];
+        yield 'kind 21059' => [EventKind::EPHEMERAL_GIFT_WRAP];
     }
 
     public function testDmRelayListIsReadableButTenantScoped(): void

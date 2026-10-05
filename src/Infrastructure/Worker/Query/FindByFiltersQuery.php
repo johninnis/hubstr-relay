@@ -19,6 +19,6 @@ final readonly class FindByFiltersQuery implements ReadQueryInterface
     #[Override]
     public function applyTo(ReadContext $context): mixed
     {
-        return $context->getEventQueryStore()->findRawJsonByFilters($this->filters);
+        return $context->getEventQueryStore()->findByFilters($this->filters);
     }
 }

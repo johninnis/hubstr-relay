@@ -15,11 +15,12 @@ final readonly class KindCount
     ) {
     }
 
-    /**
-     * @param array<array-key, mixed> $data
-     */
-    public static function tryFromArray(array $data): ?self
+    public static function tryFromArray(mixed $data): ?self
     {
+        if (!is_array($data)) {
+            return null;
+        }
+
         $kindInt = JsonWireFormat::intField($data, 'kind');
         $kind = null === $kindInt ? null : EventKind::tryFromInt($kindInt);
         $count = JsonWireFormat::intField($data, 'count');

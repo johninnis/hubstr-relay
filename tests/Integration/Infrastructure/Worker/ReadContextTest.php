@@ -22,15 +22,15 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\WriteContext;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
 use Innis\Nostr\Core\Domain\Collection\TagCollection;
-use Innis\Nostr\Core\Domain\Entity\Event;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\KeyPair;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\Tag;
+use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
+use Innis\Nostr\Relay\Domain\ValueObject\StoredEvent;
 use PDO;
 use PHPUnit\Framework\TestCase;
-use RuntimeException;
 
 final class ReadContextTest extends TestCase
 {
@@ -55,10 +55,8 @@ final class ReadContextTest extends TestCase
 
         $result = new FindByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]))->applyTo($this->context);
 
-        self::assertIsArray($result);
-        self::assertCount(1, $result);
-        self::assertIsString($result[0]);
-        self::assertSame($event->getId()->toHex(), (Event::tryFromJson($result[0]) ?? throw new RuntimeException('Invalid event'))->getId()->toHex());
+        self::assertInstanceOf(StoredEventCollection::class, $result);
+        self::assertSame([$event->getId()->toHex()], array_map(static fn (StoredEvent $stored): string => $stored->getHeader()->getId()->toHex(), $result->toArray()));
     }
 
     public function testFindByFiltersQueryHonoursTheLimitOnTheFilter(): void
@@ -68,7 +66,7 @@ final class ReadContextTest extends TestCase
 
         $result = new FindByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1], 'limit' => 1])]))->applyTo($this->context);
 
-        self::assertIsArray($result);
+        self::assertInstanceOf(StoredEventCollection::class, $result);
         self::assertCount(1, $result);
     }
 

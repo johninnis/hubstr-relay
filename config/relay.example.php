@@ -25,6 +25,7 @@ return [
         'max_filters' => 5,
         'max_limit' => 1000,
         'max_content_length' => 65536,
+        'max_filter_values' => 5000,
     ],
 
     'trusted_proxies' => ['127.0.0.1'],

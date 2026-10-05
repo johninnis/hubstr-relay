@@ -19,19 +19,14 @@ final class KindCountCollection extends TypedCollection
         return KindCount::class;
     }
 
-    private static function tryParse(mixed $value): ?KindCount
-    {
-        return is_array($value) ? KindCount::tryFromArray($value) : null;
-    }
-
     public static function fromRows(mixed $rows): self
     {
-        return self::fromEach($rows, self::tryParse(...));
+        return self::fromEach($rows, KindCount::tryFromArray(...));
     }
 
     public static function tryFromArray(mixed $values): ?self
     {
-        return self::tryFromEach($values, self::tryParse(...));
+        return self::tryFromEach($values, KindCount::tryFromArray(...));
     }
 
     /**

@@ -38,7 +38,7 @@ final class ExportEventsUseCaseTest extends TestCase
         )), false);
 
         self::assertCount(2, $query->receivedFilters);
-        self::assertTrue($query->receivedFilters[0]->hasAuthors());
+        self::assertNotNull($query->receivedFilters[0]->getAuthors());
         self::assertNotNull($query->receivedFilters[1]->getTags());
     }
 

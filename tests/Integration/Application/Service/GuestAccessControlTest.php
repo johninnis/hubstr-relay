@@ -18,7 +18,6 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\WriteCoordinator;
 use Innis\Hubstr\Relay\Tests\Fake\CapturingConnection;
 use Innis\Hubstr\Relay\Tests\Fake\DirectWriteChannel;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
-use Innis\Nostr\Core\Domain\Collection\EventCollection;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
@@ -28,6 +27,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Identity\KeyPair;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
+use Innis\Nostr\Core\Domain\ValueObject\Protocol\Message\RelayMessage;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\SubscriptionId;
 use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Core\Infrastructure\Crypto\NativeRandomBytesGenerator;
@@ -41,10 +41,14 @@ use Innis\Nostr\Relay\Application\Service\InMemoryAuthenticationRegistry;
 use Innis\Nostr\Relay\Application\Service\InMemoryClientRegistry;
 use Innis\Nostr\Relay\Application\Service\InMemorySubscriptionRegistry;
 use Innis\Nostr\Relay\Application\Service\RateLimitGate;
+use Innis\Nostr\Relay\Application\Service\RegisteringStoredEventStreamer;
+use Innis\Nostr\Relay\Application\Service\StoredEventReadGate;
 use Innis\Nostr\Relay\Application\Service\StoredEventStreamer;
 use Innis\Nostr\Relay\Application\Service\SubscriptionActivator;
 use Innis\Nostr\Relay\Application\Service\SubscriptionAdmission;
+use Innis\Nostr\Relay\Application\Service\SubscriptionAnswers;
 use Innis\Nostr\Relay\Application\UseCase\CreateSubscriptionUseCase;
+use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
 use Innis\Nostr\Relay\Domain\ValueObject\ConnectionInfo;
 use Innis\Nostr\Relay\Domain\ValueObject\IpAddress;
@@ -108,26 +112,18 @@ final class GuestAccessControlTest extends TestCase
         );
 
         $storedEventStreamer = new StoredEventStreamer(
-            $this->eventStore,
-            $this->policy,
+            new StoredEventReadGate($this->eventStore, $this->policy, new SystemClock()),
             $clientMessenger,
-            $this->subscriptionManager,
-            new SystemClock(),
             new NullLogger(),
         );
 
         $activator = new SubscriptionActivator(
             $admission,
-            $this->subscriptionManager,
-            $storedEventStreamer,
-            new AmphpDeferredExecutor(),
-            new AuthChallengeIssuer($this->authManager),
+            new RegisteringStoredEventStreamer(new AmphpDeferredExecutor(), $storedEventStreamer, $this->subscriptionManager),
+            new SubscriptionAnswers($this->subscriptionManager, new AuthChallengeIssuer($this->authManager)),
         );
 
-        $this->useCase = new CreateSubscriptionUseCase(
-            $activator,
-            new NullLogger(),
-        );
+        $this->useCase = new CreateSubscriptionUseCase($activator);
     }
 
     /**
@@ -216,6 +212,18 @@ final class GuestAccessControlTest extends TestCase
         self::assertSame($this->strangerEventId, $delivered[0]->getId()->toHex());
     }
 
+    public function testAReqBindingMoreValuesThanSqliteAllowsIsClosedBeforeItReachesTheStore(): void
+    {
+        $authors = array_map(static fn (int $i): string => sprintf('%064x', $i), range(1, 40_000));
+
+        $messages = $this->sentMessages(new FilterCollection([Filter::tryFromArray(['authors' => $authors]) ?? self::fail('filter did not parse')]), authenticateTenant: true);
+
+        self::assertSame(
+            [sprintf('["CLOSED","sub-1","blocked: too many values in one filter (max %d)"]', RelayLimits::defaults()->getMaxFilterValues())],
+            $messages,
+        );
+    }
+
     /**
      * @param list<array<string, mixed>> $rawFilters
      *
@@ -223,24 +231,8 @@ final class GuestAccessControlTest extends TestCase
      */
     private function deliveredEvents(array $rawFilters, bool $authenticateTenant): array
     {
-        $filters = new FilterCollection(array_map($this->resolveFilter(...), $rawFilters));
-
-        $connection = new CapturingConnection();
-        $client = $this->clientManager->registerClient(
-            $connection,
-            new ConnectionInfo(IpAddress::fromString('127.0.0.1'), 'Test/1.0', Timestamp::now()),
-        );
-
-        if ($authenticateTenant) {
-            $this->authManager->authenticate($client->getId(), $this->tenant->getPublicKey());
-        }
-
-        $subscriptionId = SubscriptionId::tryFromString('sub-1') ?? throw new RuntimeException('Invalid subscription id');
-        $this->useCase->execute($client, $subscriptionId, $filters);
-        EventLoop::run();
-
         $events = [];
-        foreach ($connection->messages as $message) {
+        foreach ($this->sentMessages(new FilterCollection(array_map($this->resolveFilter(...), $rawFilters)), $authenticateTenant) as $message) {
             $decoded = json_decode($message, true);
             if (!is_array($decoded) || 'EVENT' !== ($decoded[0] ?? null)) {
                 continue;
@@ -253,6 +245,28 @@ final class GuestAccessControlTest extends TestCase
         }
 
         return $events;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function sentMessages(FilterCollection $filters, bool $authenticateTenant): array
+    {
+        $connection = new CapturingConnection();
+        $client = $this->clientManager->registerClient(
+            $connection,
+            new ConnectionInfo(IpAddress::fromString('127.0.0.1'), 'Test/1.0', Timestamp::now()),
+        );
+
+        if ($authenticateTenant) {
+            $this->authManager->authenticate($client->getId(), $this->tenant->getPublicKey());
+        }
+
+        $subscriptionId = SubscriptionId::tryFromString('sub-1') ?? throw new RuntimeException('Invalid subscription id');
+        $replies = $this->useCase->execute($client, $subscriptionId, $filters);
+        EventLoop::run();
+
+        return [...array_map(static fn (RelayMessage $reply): string => $reply->toJson(), $replies), ...$connection->messages];
     }
 
     /**
@@ -279,12 +293,9 @@ final class GuestAccessControlTest extends TestCase
                 return EventStoreOutcome::Stored;
             }
 
-            public function findByFilters(FilterCollection $filters, int $limit = 100): EventCollection
+            public function findByFilters(FilterCollection $filters): StoredEventCollection
             {
-                return new EventCollection(array_values(array_filter(array_map(
-                    static fn (string $rawEvent) => Event::tryFromJson($rawEvent),
-                    $this->queryStore->findRawJsonByFilters($filters),
-                ))));
+                return $this->queryStore->findByFilters($filters);
             }
 
             public function countByFilters(FilterCollection $filters): EventCount
@@ -297,7 +308,7 @@ final class GuestAccessControlTest extends TestCase
                 return 0;
             }
 
-            public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author): int
+            public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author, Timestamp $until): int
             {
                 return 0;
             }

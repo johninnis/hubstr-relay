@@ -29,4 +29,11 @@ final class CorsHeadersTest extends TestCase
 
         self::assertStringContainsStringIgnoringCase('Authorization', (string) $response->getHeader('access-control-allow-headers'));
     }
+
+    public function testTheReasonHeaderIsExposedSoABrowserClientCanReadAnErrorMessage(): void
+    {
+        $response = new CorsHeaders()->applyTo(new Response(HttpStatus::OK));
+
+        self::assertStringContainsStringIgnoringCase('X-Reason', (string) $response->getHeader('access-control-expose-headers'));
+    }
 }

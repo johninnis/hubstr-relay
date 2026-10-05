@@ -24,14 +24,17 @@ use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventCoordinate;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\KeyPair;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
+use Innis\Nostr\Core\Domain\ValueObject\Protocol\Rumour;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\Hashtag;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\Tag;
 use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
+use Innis\Nostr\Relay\Domain\ValueObject\StoredEvent;
 use PDO;
 use PDOStatement;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 final class EventStorageTest extends TestCase
 {
@@ -60,13 +63,13 @@ final class EventStorageTest extends TestCase
     private function findEvents(array $filters, int $limit = 100): array
     {
         return array_map(
-            static function (string $rawEvent): Event {
-                $event = Event::tryFromJson($rawEvent);
+            static function (StoredEvent $stored): Event {
+                $event = Event::tryFromJson($stored->getEncoded()->toJson());
                 self::assertNotNull($event);
 
                 return $event;
             },
-            $this->queryStore->findRawJsonByFilters(new FilterCollection($filters)),
+            $this->queryStore->findByFilters(new FilterCollection($filters))->toArray(),
         );
     }
 
@@ -85,20 +88,19 @@ final class EventStorageTest extends TestCase
         $this->assertSame('Hello Nostr!', (string) $results[0]->getContent());
     }
 
-    public function testFindByFiltersResultsCarryVerbatimRawJson(): void
+    public function testWhatIsStoredIsTheEventsOwnEncodingNotTheBytesItArrivedAs(): void
     {
-        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'Hello Nostr!');
-        $this->writeStore->store($event);
+        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), "Hello Nostr!\u{2028}/");
+        $arrived = Event::tryFromJson(json_encode([...$event->toArray(), 'evil' => 'unsigned'], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
+        self::assertNotNull($arrived);
+        $this->writeStore->store($arrived);
 
-        $results = $this->findEvents(
-            [Filter::tryFromArray(['ids' => [$event->getId()->toHex()]])],
-        );
+        $results = $this->queryStore->findByFilters(
+            new FilterCollection([Filter::tryFromArray(['ids' => [$event->getId()->toHex()]])]),
+        )->toArray();
 
         $this->assertCount(1, $results);
-        $this->assertSame(
-            json_encode($event->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-            $results[0]->getRawJson(),
-        );
+        $this->assertSame($event->toJson(), $results[0]->getEncoded()->toJson());
     }
 
     public function testInvalidHexFilterValuesAreRejectedAtTheBoundary(): void
@@ -517,6 +519,36 @@ final class EventStorageTest extends TestCase
         $this->assertCount(0, $results);
     }
 
+    public function testFts5SearchSkipsNip50ExtensionTokens(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'bitcoin and freedom'));
+        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'gold and money'));
+
+        $results = $this->findEvents([Filter::tryFromArray(['search' => 'bitcoin include:spam domain:example.com language:en sentiment:positive nsfw:true'])]);
+
+        $this->assertCount(1, $results);
+        $this->assertStringContainsString('bitcoin', (string) $results[0]->getContent());
+    }
+
+    public function testFts5SearchOfOnlyExtensionTokensImposesNoConstraint(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'bitcoin and freedom'));
+        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'gold and money'));
+
+        $results = $this->findEvents([Filter::tryFromArray(['search' => 'include:spam language:en'])]);
+
+        $this->assertCount(2, $results);
+    }
+
+    public function testFts5SearchKeepsAUrlAsASearchTerm(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'check https://example.com out'));
+
+        $results = $this->findEvents([Filter::tryFromArray(['search' => 'https://example.com'])]);
+
+        $this->assertCount(1, $results);
+    }
+
     public function testCountByFilters(): void
     {
         for ($i = 0; $i < 5; ++$i) {
@@ -618,13 +650,175 @@ final class EventStorageTest extends TestCase
 
     public function testDeleteByCoordinates(): void
     {
-        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'article', new TagCollection([Tag::identifier('my-article')]));
-        $this->writeStore->store($event);
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'article', 100, new TagCollection([Tag::identifier('my-article')])));
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'other', 100, new TagCollection([Tag::identifier('other-article')])));
 
-        $coordinate = EventCoordinate::tryFromParts(30023, $this->keyPair->getPublicKey()->toHex(), 'my-article');
+        $this->assertSame(1, $this->deleteByCoordinate(EventKind::LONGFORM_CONTENT, 'my-article', 150));
+        $this->assertSame(['other'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
 
-        $this->assertSame(1, $this->writeStore->deleteByCoordinates(new EventCoordinateCollection([$coordinate]), $this->keyPair->getPublicKey()));
-        $this->assertSame(0, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [30023]])]), self::COUNT_LIMIT)->toInt());
+    public function testAnAddressableCoordinateLeavesAVersionNewerThanTheRequest(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'article', 200, new TagCollection([Tag::identifier('my-article')])));
+
+        $this->assertSame(0, $this->deleteByCoordinate(EventKind::LONGFORM_CONTENT, 'my-article', 150));
+        $this->assertSame(['article'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnAddressableCoordinateWithAnEmptyIdentifierDeletesTheEmptyIdentifiersVersion(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'empty', 100, new TagCollection([Tag::identifier('')])));
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'named', 100, new TagCollection([Tag::identifier('my-article')])));
+
+        $this->assertSame(1, $this->deleteByCoordinate(EventKind::LONGFORM_CONTENT, '', 150));
+        $this->assertSame(['named'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnAddressableCoordinateWithAnEmptyIdentifierDeletesAVersionWithNoDTagUpToTheRequest(): void
+    {
+        $this->writeStore->store($this->articleWithoutDTag('untagged', 100));
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'named', 100, new TagCollection([Tag::identifier('my-article')])));
+
+        $this->assertSame(1, $this->deleteByCoordinate(EventKind::LONGFORM_CONTENT, '', 150));
+        $this->assertSame(['named'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnAddressableCoordinateWithAnEmptyIdentifierLeavesAVersionWithNoDTagNewerThanTheRequest(): void
+    {
+        $this->writeStore->store($this->articleWithoutDTag('untagged', 200));
+
+        $this->assertSame(0, $this->deleteByCoordinate(EventKind::LONGFORM_CONTENT, '', 150));
+        $this->assertSame(['untagged'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnAddressableEventWithAnEmptyDTagReplacesOneWithNoDTag(): void
+    {
+        $this->writeStore->store($this->articleWithoutDTag('untagged', 100));
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'empty', 200, new TagCollection([Tag::identifier('')])));
+
+        $this->assertSame(['empty'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnAddressableEventWithNoDTagReplacesAnOlderOneWithNoDTag(): void
+    {
+        $this->writeStore->store($this->articleWithoutDTag('first', 100));
+        $this->writeStore->store($this->articleWithoutDTag('second', 200));
+
+        $this->assertSame(['second'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnOlderAddressableEventWithNoDTagIsSupersededByAnEmptyDTag(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), 'empty', 200, new TagCollection([Tag::identifier('')])));
+
+        $this->assertSame(EventStoreOutcome::Superseded, $this->writeStore->store($this->articleWithoutDTag('untagged', 100)));
+    }
+
+    public function testAReplaceableCoordinateDeletesTheAuthorsVersionUpToTheRequest(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::METADATA), 'profile', 100));
+
+        $this->assertSame(1, $this->deleteByCoordinate(EventKind::METADATA, '', 150));
+        $this->assertSame([], $this->contentsOfKind(EventKind::METADATA));
+    }
+
+    public function testAReplaceableCoordinateDeletesAVersionCreatedAtTheRequestsOwnTimestamp(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::PIN_LIST), 'pins', 150));
+
+        $this->assertSame(1, $this->deleteByCoordinate(EventKind::PIN_LIST, '', 150));
+    }
+
+    public function testAReplaceableCoordinateLeavesAVersionNewerThanTheRequest(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::METADATA), 'profile', 200));
+
+        $this->assertSame(0, $this->deleteByCoordinate(EventKind::METADATA, '', 150));
+        $this->assertSame(['profile'], $this->contentsOfKind(EventKind::METADATA));
+    }
+
+    public function testAReplaceableCoordinateLeavesAnotherAuthorsVersion(): void
+    {
+        $stranger = KeyPair::generate(SignedEventFactory::signer());
+        $this->writeStore->store(SignedEventFactory::signedEventAtTime($stranger, EventKind::fromInt(EventKind::METADATA), 'stranger', 100));
+
+        $this->assertSame(0, $this->deleteByCoordinate(EventKind::METADATA, '', 150));
+        $this->assertSame(['stranger'], $this->contentsOfKind(EventKind::METADATA));
+    }
+
+    public function testAnAddressableEventWhoseDTagsDisagreeIsNotReplacedThroughItsFirst(): void
+    {
+        $this->writeStore->store($this->articleWithDTags('older', 100, 'first', 'second'));
+        $this->writeStore->store($this->articleWithDTags('newer', 200, 'first'));
+
+        $this->assertSame(['newer', 'older'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnAddressableEventWhoseDTagsDisagreeIsNotReplacedThroughItsSecond(): void
+    {
+        $this->writeStore->store($this->articleWithDTags('older', 100, 'first', 'second'));
+        $this->writeStore->store($this->articleWithDTags('newer', 200, 'second'));
+
+        $this->assertSame(['newer', 'older'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testAnAddressableEventWhoseDTagsDisagreeReplacesNothing(): void
+    {
+        $this->writeStore->store($this->articleWithDTags('older', 100, 'second'));
+        $this->writeStore->store($this->articleWithDTags('newer', 200, 'first', 'second'));
+
+        $this->assertSame(['newer', 'older'], $this->contentsOfKind(EventKind::LONGFORM_CONTENT));
+    }
+
+    public function testACoordinateLeavesAnEventWhoseDTagsDisagreeWhenItNamesTheFirst(): void
+    {
+        $this->writeStore->store($this->articleWithDTags('article', 100, 'first', 'second'));
+
+        $this->assertSame(0, $this->deleteByCoordinate(EventKind::LONGFORM_CONTENT, 'first', 150));
+    }
+
+    public function testACoordinateLeavesAnEventWhoseDTagsDisagreeWhenItNamesTheSecond(): void
+    {
+        $this->writeStore->store($this->articleWithDTags('article', 100, 'first', 'second'));
+
+        $this->assertSame(0, $this->deleteByCoordinate(EventKind::LONGFORM_CONTENT, 'second', 150));
+    }
+
+    private function articleWithDTags(string $content, int $createdAt, string ...$identifiers): Event
+    {
+        $tags = new TagCollection(array_map(Tag::identifier(...), array_values($identifiers)));
+
+        return SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::LONGFORM_CONTENT), $content, $createdAt, $tags);
+    }
+
+    private function articleWithoutDTag(string $content, int $createdAt): Event
+    {
+        $rumour = Rumour::tryFromFields([
+            'pubkey' => $this->keyPair->getPublicKey()->toHex(),
+            'created_at' => $createdAt,
+            'kind' => EventKind::LONGFORM_CONTENT,
+            'tags' => [],
+            'content' => $content,
+        ]);
+        $this->assertInstanceOf(Rumour::class, $rumour);
+
+        return $rumour->sign($this->keyPair, SignedEventFactory::signer());
+    }
+
+    private function deleteByCoordinate(int $kind, string $identifier, int $requestedAt): int
+    {
+        $author = $this->keyPair->getPublicKey();
+        $coordinate = EventCoordinate::tryFrom(EventKind::fromInt($kind), $author, $identifier) ?? throw new RuntimeException('Invalid coordinate');
+
+        return $this->writeStore->deleteByCoordinates(new EventCoordinateCollection([$coordinate]), $author, Timestamp::fromInt($requestedAt));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function contentsOfKind(int $kind): array
+    {
+        return array_map(static fn (Event $event): string => (string) $event->getContent(), $this->findEvents([Filter::tryFromArray(['kinds' => [$kind]])]));
     }
 
     public function testDeleteByContentMatchChunkHonoursLimit(): void

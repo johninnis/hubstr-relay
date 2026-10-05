@@ -10,6 +10,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 
 final readonly class GuestWritePolicy
 {
+    // Deliberate: both gift-wrap kinds are guest-writable so any sender can deliver to a tenant, and neither is guest-readable — see ADR-0036
     private const array DEFAULT_KINDS = [
         EventKind::TEXT_NOTE,
         EventKind::REACTION,
@@ -17,6 +18,7 @@ final readonly class GuestWritePolicy
         EventKind::NUTZAP,
         EventKind::ZAP_RECEIPT,
         EventKind::GIFT_WRAP,
+        EventKind::EPHEMERAL_GIFT_WRAP,
         EventKind::NOSTR_CONNECT,
     ];
     private const bool DEFAULT_TAGGED_TO_TENANT = true;

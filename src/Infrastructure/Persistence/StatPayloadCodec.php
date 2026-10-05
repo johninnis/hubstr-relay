@@ -28,8 +28,11 @@ final readonly class StatPayloadCodec
      */
     public function decodeEntries(StatName $stat, string $payload): array
     {
-        $rows = JsonWireFormat::decodeArray($payload)
-            ?? throw new MalformedStatPayloadException('Cached stat payload is not a JSON array');
+        $rows = JsonWireFormat::decode($payload);
+
+        if (!is_array($rows) || !array_is_list($rows)) {
+            throw new MalformedStatPayloadException('Cached stat payload is not a JSON array');
+        }
 
         $entries = [];
         foreach ($rows as $row) {
@@ -49,8 +52,11 @@ final readonly class StatPayloadCodec
 
     public function decodeTotals(string $payload): StatTotals
     {
-        $decoded = JsonWireFormat::decodeArray($payload)
-            ?? throw new MalformedStatPayloadException('Cached totals payload is not a JSON object');
+        $decoded = JsonWireFormat::decode($payload);
+
+        if (!is_array($decoded) || array_is_list($decoded)) {
+            throw new MalformedStatPayloadException('Cached totals payload is not a JSON object');
+        }
 
         return StatTotals::tryFromArray($decoded)
             ?? throw new MalformedStatPayloadException('Cached totals payload has a malformed count or breakdown');

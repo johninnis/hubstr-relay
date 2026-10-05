@@ -7,11 +7,11 @@ namespace Innis\Hubstr\Relay\Tests\Integration\Application\Service;
 use Innis\Hubstr\Core\Domain\ValueObject\ConfigValues;
 use Innis\Hubstr\Core\Infrastructure\Persistence\SchemaMigrator;
 use Innis\Hubstr\Core\Infrastructure\Persistence\SqliteDatabase;
+use Innis\Hubstr\Relay\Application\DTO\RelayConfig;
 use Innis\Hubstr\Relay\Application\Service\Nip11InfoProvider;
 use Innis\Hubstr\Relay\Domain\ValueObject\GuestPolicy;
 use Innis\Hubstr\Relay\Domain\ValueObject\RelayLimits;
 use Innis\Hubstr\Relay\Domain\ValueObject\RelayMetadata;
-use Innis\Hubstr\Relay\Infrastructure\Config\RelayConfig;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\PolicyReadStore;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\PolicyState;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\WriteThroughPolicyManagement;
@@ -58,12 +58,18 @@ final class Nip11InfoProviderTest extends TestCase
 
         $this->assertNotNull($limitation);
         $this->assertSame(20, $limitation['max_subscriptions']);
-        $this->assertSame(5, $limitation['max_filters']);
         $this->assertSame(1000, $limitation['max_limit']);
         $this->assertSame(65536, $limitation['max_content_length']);
         $this->assertFalse($limitation['auth_required']);
         $this->assertFalse($limitation['payment_required']);
         $this->assertTrue($limitation['restricted_writes']);
+    }
+
+    public function testDoesNotAdvertiseMaxFiltersWhichNip11HasNoFieldFor(): void
+    {
+        $provider = new Nip11InfoProvider(self::createConfig()->getRelayInfo(), self::createPolicyState(), RelayLimits::defaults());
+
+        $this->assertArrayNotHasKey('max_filters', $provider->getNip11Info()->getLimitation() ?? []);
     }
 
     public function testExposesContactAndIconFromConfig(): void

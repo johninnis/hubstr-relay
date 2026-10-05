@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Innis\Hubstr\Relay\Infrastructure\Persistence;
 
-use Innis\Hubstr\Relay\Domain\Enum\RelayMarker;
 use Innis\Nostr\Core\Domain\Entity\Event;
 use Innis\Nostr\Core\Domain\Service\TagReferenceExtractor;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
@@ -53,7 +52,7 @@ final readonly class Denormaliser
         foreach (TagReferenceExtractor::extract($event->getTags())->getRelays() as $relay) {
             $this->statements->execute(
                 'INSERT OR IGNORE INTO profile_relays (pubkey, relay_url, marker) VALUES (?, ?, ?)',
-                [$pubkeyBin, (string) $relay->getRelayUrl(), RelayMarker::fromMode($relay->getMode())->value],
+                [$pubkeyBin, (string) $relay->getRelayUrl(), $relay->getMarker()->value],
             );
         }
     }
@@ -70,7 +69,7 @@ final readonly class Denormaliser
             'INSERT OR IGNORE INTO zap_receipts (event_id, sender_pubkey, recipient_pubkey, amount_msats) VALUES (?, ?, ?, ?)',
             [
                 $event->getId()->toBytes(),
-                $receipt->getSenderPubkey()?->toBytes(),
+                $receipt->getSenderPubkey()->toBytes(),
                 $recipientPubkey->toBytes(),
                 $receipt->getAmount()->toMillisats(),
             ],

@@ -6,11 +6,14 @@ namespace Innis\Hubstr\Relay\Tests\Unit\Presentation\Cli;
 
 use Innis\Hubstr\Relay\Application\Port\EventWriterInterface;
 use Innis\Hubstr\Relay\Application\Port\PolicyStateInterface;
+use Innis\Hubstr\Relay\Application\Service\ImportAdmission;
 use Innis\Hubstr\Relay\Application\UseCase\ImportEventUseCase;
 use Innis\Hubstr\Relay\Domain\Enum\ImportOutcome;
 use Innis\Hubstr\Relay\Presentation\Cli\ImportTally;
 use Innis\Hubstr\Relay\Presentation\Cli\JsonlImporter;
+use Innis\Nostr\Core\Application\Port\ClockInterface;
 use Innis\Nostr\Core\Domain\Service\EventValidatorInterface;
+use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -74,7 +77,10 @@ final class JsonlImporterTest extends TestCase
         $policyState = $this->createStub(PolicyStateInterface::class);
         $policyState->method('isEventBlacklisted')->willReturn(false);
 
-        return new JsonlImporter(new ImportEventUseCase($validator, $policyState, $store));
+        $clock = $this->createStub(ClockInterface::class);
+        $clock->method('now')->willReturn(Timestamp::fromInt(1_700_000_000));
+
+        return new JsonlImporter(new ImportEventUseCase(new ImportAdmission($validator, $policyState, $clock), $store));
     }
 
     private static function ignoreProgress(int $linesRead, ImportTally $tally): void

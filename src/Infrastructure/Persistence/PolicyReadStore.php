@@ -14,6 +14,7 @@ use Innis\Nostr\Core\Domain\Collection\PublicKeyCollection;
 use Innis\Nostr\Core\Domain\Service\JsonWireFormat;
 use Innis\Nostr\Relay\Domain\ValueObject\IpAddress;
 use PDO;
+use stdClass;
 
 final readonly class PolicyReadStore
 {
@@ -98,9 +99,13 @@ final readonly class PolicyReadStore
             return null;
         }
 
-        $decoded = JsonWireFormat::decodeArray($json);
+        $decoded = JsonWireFormat::decode($json);
 
-        if (null === $decoded || ([] !== $decoded && array_is_list($decoded))) {
+        if ($decoded instanceof stdClass) {
+            return [];
+        }
+
+        if (!is_array($decoded) || array_is_list($decoded)) {
             throw new MalformedSettingException(sprintf('The stored %s setting is not a JSON object', $key->value));
         }
 

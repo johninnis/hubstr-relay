@@ -2,14 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Innis\Hubstr\Relay\Infrastructure\Config;
+namespace Innis\Hubstr\Relay\Application\DTO;
 
-use Innis\Hubstr\Core\Application\Port\VersionProviderInterface;
 use Innis\Hubstr\Core\Domain\ValueObject\ConfigValues;
 use Innis\Hubstr\Core\Domain\ValueObject\ServiceRuntimeConfig;
-use Innis\Hubstr\Core\Infrastructure\Config\ConfigLoader;
-use Innis\Hubstr\Core\Infrastructure\Version\ComposerVersionProvider;
 use Innis\Hubstr\Relay\Domain\ValueObject\RelayLimits;
+use Innis\Nostr\Core\Domain\ValueObject\EventLimits;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Nip11Info;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\RelayUrl;
@@ -20,14 +18,13 @@ use Override;
 final readonly class RelayConfig implements RelayConfigInterface
 {
     private const array SUPPORTED_NIPS = [1, 9, 11, 40, 42, 45, 50, 70, 86, 98];
-    private const string SOFTWARE = 'hubstr-relay';
-    private const string ENVIRONMENT_VARIABLE = 'HUBSTR_RELAY_CONFIG';
+    private const string SOFTWARE = 'https://www.hubstr.xyz/relay/';
     private const string DEFAULT_NAME = 'Hubstr Relay';
     private const int DEFAULT_PORT = 8080;
     private const int DEFAULT_MAX_CONNECTIONS = 100;
     private const array KEYS = ['admin_pubkey', 'relay_url', 'name', 'description', 'contact', 'icon', 'connection_limits', 'limits'];
     private const array CONNECTION_LIMIT_KEYS = ['max_connections'];
-    private const array LIMIT_KEYS = ['max_subscriptions', 'max_filters', 'max_limit', 'max_content_length'];
+    private const array LIMIT_KEYS = ['max_subscriptions', 'max_filters', 'max_limit', 'max_content_length', 'max_filter_values'];
 
     private function __construct(
         private ServiceRuntimeConfig $runtime,
@@ -36,11 +33,6 @@ final readonly class RelayConfig implements RelayConfigInterface
         private Nip11Info $relayInfo,
         private RelayLimits $relayLimits,
     ) {
-    }
-
-    public static function load(string $configPath, VersionProviderInterface $versionProvider = new ComposerVersionProvider()): self
-    {
-        return self::fromValues(new ConfigLoader(self::ENVIRONMENT_VARIABLE)->load($configPath), $versionProvider->getVersion());
     }
 
     public static function fromValues(ConfigValues $values, ?string $version = null): self
@@ -84,6 +76,7 @@ final readonly class RelayConfig implements RelayConfigInterface
             maxFilters: $limits->optionalInt('max_filters') ?? $defaults->getMaxFilters(),
             maxLimit: $limits->optionalInt('max_limit') ?? $defaults->getMaxLimit(),
             maxContentLength: $limits->optionalInt('max_content_length') ?? $defaults->getMaxContentLength(),
+            maxFilterValues: $limits->optionalInt('max_filter_values') ?? $defaults->getMaxFilterValues(),
         );
     }
 
@@ -117,5 +110,11 @@ final readonly class RelayConfig implements RelayConfigInterface
     public function getRelayLimits(): RelayLimits
     {
         return $this->relayLimits;
+    }
+
+    #[Override]
+    public function getEventLimits(): EventLimits
+    {
+        return $this->relayLimits->toEventLimits();
     }
 }

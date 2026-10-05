@@ -8,10 +8,10 @@ use Amp\Http\Server\SocketHttpServer;
 use Innis\Hubstr\Core\Domain\ValueObject\ConfigValues;
 use Innis\Hubstr\Core\Infrastructure\Persistence\SchemaMigrator;
 use Innis\Hubstr\Core\Infrastructure\Persistence\SqliteDatabase;
+use Innis\Hubstr\Relay\Application\DTO\RelayConfig;
 use Innis\Hubstr\Relay\Application\Service\HubstrPolicy;
 use Innis\Hubstr\Relay\Domain\ValueObject\BlockedIp;
 use Innis\Hubstr\Relay\Domain\ValueObject\GuestPolicy;
-use Innis\Hubstr\Relay\Infrastructure\Config\RelayConfig;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\PolicyReadStore;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\PolicyState;
 use Innis\Hubstr\Relay\Infrastructure\RateLimiting\PolicyStateRateLimitPolicy;
@@ -31,6 +31,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Protocol\Message\Client\CloseMessage;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Message\Client\CountMessage;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Message\Client\EventMessage;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Message\Client\ReqMessage;
+use Innis\Nostr\Core\Domain\ValueObject\Protocol\RelayChallenge;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Rumour;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\SubscriptionId;
 use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
@@ -96,27 +97,28 @@ final class HostileSessionChurn
             eventStore: new InMemoryEventStore(),
             policy: new HubstrPolicy($policyState, $authenticationRegistry, $config->getRelayLimits()),
             config: $config,
-            rateLimitPolicy: new PolicyStateRateLimitPolicy($policyState),
-            authenticationRegistry: $authenticationRegistry,
-            logger: new NullLogger(),
-            nip11InfoProvider: new StaticNip11InfoProvider($config->getRelayInfo()),
-            signatureService: $signer,
-            connectionGate: $policyState,
-        )->create(SocketHttpServer::createForDirectAccess(new NullLogger()));
+        )
+            ->withRateLimitPolicy(new PolicyStateRateLimitPolicy($policyState))
+            ->withAuthenticationRegistry($authenticationRegistry)
+            ->withNip11InfoProvider(new StaticNip11InfoProvider($config->getRelayInfo()))
+            ->withSignatureService($signer)
+            ->withConnectionGate($policyState)
+            ->withLogger(new NullLogger())
+            ->create(SocketHttpServer::createForDirectAccess(new NullLogger()));
 
         $coordinator = $relay->getSessionCoordinator();
         $relayState = new LiveRelayState($relay);
 
         $signedNotes = [];
         for ($i = 0; $i < self::SIGNED_NOTES; ++$i) {
-            $note = new Rumour($tenant->getPublicKey(), Timestamp::now(), EventKind::fromInt(EventKind::TEXT_NOTE), new TagCollection(), EventContent::fromString('tenant churn note '.$i))->sign($tenant, $signer);
+            $note = Rumour::draft($tenant->getPublicKey(), EventKind::fromInt(EventKind::TEXT_NOTE), EventContent::fromString('tenant churn note '.$i), new TagCollection())->sign($tenant, $signer);
             $signedNotes[] = new EventMessage($note)->toJson();
         }
 
         $authAnswers = [];
         for ($i = 0; $i < self::AUTH_ANSWERS; ++$i) {
-            $authEvent = RumourFactory::createAuth($tenant->getPublicKey(), $config->getRelayUrl(), Challenge::fromString('challenge-'.$i))->sign($tenant, $signer);
-            $authAnswers[] = new AuthMessage($authEvent)->toJson();
+            $authEvent = new RumourFactory($tenant->getPublicKey())->createAuth(new RelayChallenge($config->getRelayUrl(), Challenge::fromString('challenge-'.$i)))->sign($tenant, $signer);
+            $authAnswers[] = AuthMessage::fromEvent($authEvent)->toJson();
         }
 
         $churnKeys = [];
@@ -254,15 +256,15 @@ final class HostileSessionChurn
      */
     private static function frame(SubscriptionId $subscriptionId, array $signedNotes, array $authAnswers): string
     {
-        $everything = new FilterCollection([new Filter()]);
+        $everything = new FilterCollection([Filter::from()]);
         $id = (string) $subscriptionId;
 
         $menu = [
             $signedNotes[mt_rand(0, count($signedNotes) - 1)],
             $authAnswers[mt_rand(0, count($authAnswers) - 1)],
-            new ReqMessage($subscriptionId, $everything)->toJson(),
+            ReqMessage::from($subscriptionId, $everything)->toJson(),
             new CloseMessage($subscriptionId)->toJson(),
-            new CountMessage($subscriptionId, $everything)->toJson(),
+            CountMessage::from($subscriptionId, $everything)->toJson(),
             '{',
             '',
             'not json at all',

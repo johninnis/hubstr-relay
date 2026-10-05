@@ -172,11 +172,12 @@ final class DenormaliserTest extends TestCase
         $senderPk = KeyPair::generate(SignedEventFactory::signer());
         $recipient = KeyPair::generate(SignedEventFactory::signer())->getPublicKey();
 
-        $zapRequestJson = json_encode([
-            'pubkey' => $senderPk->getPublicKey()->toHex(),
-            'content' => 'Great post!',
-            'tags' => [['amount', '21000']],
-        ], JSON_THROW_ON_ERROR);
+        $zapRequestJson = SignedEventFactory::signedEvent(
+            $senderPk,
+            EventKind::fromInt(EventKind::ZAP_REQUEST),
+            'Great post!',
+            new TagCollection([Tag::fromArray(['amount', '21000'])]),
+        )->toJson();
 
         $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::ZAP_RECEIPT), '', new TagCollection([
             Tag::pubkey($recipient),
@@ -204,11 +205,12 @@ final class DenormaliserTest extends TestCase
         $senderPk = KeyPair::generate(SignedEventFactory::signer());
         $recipient = KeyPair::generate(SignedEventFactory::signer())->getPublicKey();
 
-        $zapRequestJson = json_encode([
-            'pubkey' => $senderPk->getPublicKey()->toHex(),
-            'content' => '',
-            'tags' => [['amount', '9223372036854775807']],
-        ], JSON_THROW_ON_ERROR);
+        $zapRequestJson = SignedEventFactory::signedEvent(
+            $senderPk,
+            EventKind::fromInt(EventKind::ZAP_REQUEST),
+            '',
+            new TagCollection([Tag::fromArray(['amount', '9223372036854775807'])]),
+        )->toJson();
 
         $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::ZAP_RECEIPT), '', new TagCollection([
             Tag::pubkey($recipient),

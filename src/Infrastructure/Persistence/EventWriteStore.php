@@ -15,8 +15,8 @@ use Innis\Nostr\Core\Domain\Collection\EventCollection;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\Entity\Event;
-use Innis\Nostr\Core\Domain\Enum\EventKindCategory;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
+use Innis\Nostr\Core\Domain\ValueObject\Identity\EventCoordinate;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventId;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventVersion;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
@@ -24,6 +24,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Tag\Hashtag;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\TagType;
 use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
+use Innis\Nostr\Relay\Domain\ValueObject\EncodedEvent;
 use Override;
 use PDO;
 use Throwable;
@@ -95,27 +96,31 @@ final readonly class EventWriteStore implements EventWriterInterface
         return $statement->rowCount();
     }
 
-    public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author): int
+    public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author, Timestamp $until): int
     {
-        $authorBin = $author->toBytes();
         $deleted = 0;
 
-        $sql = 'DELETE FROM events WHERE event_id IN (
-                SELECT e.event_id FROM events e
-                INNER JOIN event_tags t ON t.event_id = e.event_id
-                WHERE e.pubkey = ? AND e.kind = ? AND t.tag_name = ? AND t.tag_value = ?
-            )';
-
         foreach ($coordinates as $coordinate) {
-            $deleted += $this->statements->execute($sql, [
-                $authorBin,
-                $coordinate->getKind()->toInt(),
-                TagType::IDENTIFIER,
-                $coordinate->getIdentifier(),
-            ]);
+            [$where, $params] = self::whereAddressed($coordinate, $author);
+
+            $deleted += $this->statements->execute(
+                "DELETE FROM events WHERE event_id IN (SELECT e.event_id FROM events e WHERE {$where} AND e.created_at <= ?)",
+                [...$params, $until->toInt()],
+            );
         }
 
         return $deleted;
+    }
+
+    /**
+     * @return array{string, list<int|string>}
+     */
+    private static function whereAddressed(EventCoordinate $coordinate, PublicKey $author): array
+    {
+        return [
+            'e.pubkey = ? AND e.kind = ? AND e.address_identifier = ?',
+            [$author->toBytes(), $coordinate->getKind()->toInt(), $coordinate->getIdentifier()],
+        ];
     }
 
     public function deleteByContentMatchChunk(BlacklistWord $word, int $limit): int
@@ -204,17 +209,13 @@ final readonly class EventWriteStore implements EventWriterInterface
             return EventStoreOutcome::Duplicate;
         }
 
-        $kind = $event->getKind();
+        $coordinate = EventCoordinate::tryFromEvent($event);
 
-        if (EventKindCategory::Replaceable === $kind->category() && !$this->handleReplaceableEvent($event)) {
+        if (null !== $coordinate && !$this->supersedeIfNewer($event, $this->incumbentAt($coordinate))) {
             return EventStoreOutcome::Superseded;
         }
 
-        if (EventKindCategory::Addressable === $kind->category() && !$this->handleParameterisedReplaceableEvent($event)) {
-            return EventStoreOutcome::Superseded;
-        }
-
-        $this->insertEvent($event, $eventIdBin);
+        $this->insertEvent($event, $eventIdBin, $coordinate);
         $this->insertTags($event, $eventIdBin);
         $this->denormaliser->denormalise($event);
 
@@ -226,24 +227,14 @@ final readonly class EventWriteStore implements EventWriterInterface
         return null !== $this->statements->selectRow('SELECT 1 FROM events WHERE event_id = ?', [$eventIdBin]);
     }
 
-    private function handleReplaceableEvent(Event $event): bool
+    /**
+     * @return array<array-key, mixed>|null
+     */
+    private function incumbentAt(EventCoordinate $coordinate): ?array
     {
-        return $this->supersedeIfNewer($event, $this->statements->selectRow(
-            'SELECT event_id, created_at FROM events WHERE pubkey = ? AND kind = ?',
-            [$event->getPubkey()->toBytes(), $event->getKind()->toInt()],
-        ));
-    }
+        [$where, $params] = self::whereAddressed($coordinate, $coordinate->getPubkey());
 
-    private function handleParameterisedReplaceableEvent(Event $event): bool
-    {
-        $dTag = $event->getTags()->getFirstValueByType(TagType::identifier()) ?? '';
-
-        return $this->supersedeIfNewer($event, $this->statements->selectRow(
-            'SELECT e.event_id, e.created_at FROM events e
-             INNER JOIN event_tags t ON t.event_id = e.event_id
-             WHERE e.pubkey = ? AND e.kind = ? AND t.tag_name = ? AND t.tag_value = ?',
-            [$event->getPubkey()->toBytes(), $event->getKind()->toInt(), TagType::IDENTIFIER, $dTag],
-        ));
+        return $this->statements->selectRow("SELECT e.event_id, e.created_at FROM events e WHERE {$where}", $params);
     }
 
     /**
@@ -294,17 +285,19 @@ final readonly class EventWriteStore implements EventWriterInterface
         );
     }
 
-    private function insertEvent(Event $event, string $eventIdBin): void
+    // Deliberate: raw_event holds EncodedEvent::of() of a verified event from this, the only write path — rows from before v0.2.0 keep the bytes they were admitted with — see ADR-0034
+    private function insertEvent(Event $event, string $eventIdBin, ?EventCoordinate $coordinate): void
     {
         $this->statements->execute(
-            'INSERT INTO events (event_id, pubkey, kind, created_at, content, raw_event) VALUES (?, ?, ?, ?, ?, ?)',
+            'INSERT INTO events (event_id, pubkey, kind, created_at, content, raw_event, address_identifier) VALUES (?, ?, ?, ?, ?, ?, ?)',
             [
                 $eventIdBin,
                 $event->getPubkey()->toBytes(),
                 $event->getKind()->toInt(),
                 $event->getCreatedAt()->toInt(),
                 (string) $event->getContent(),
-                $event->toJson(),
+                EncodedEvent::of($event)->toJson(),
+                $coordinate?->getIdentifier(),
             ],
         );
     }

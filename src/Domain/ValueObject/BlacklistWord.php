@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace Innis\Hubstr\Relay\Domain\ValueObject;
 
+use Innis\Nostr\Core\Domain\ValueObject\IdentityKeyedInterface;
 use InvalidArgumentException;
 use Override;
 use Stringable;
 
-final readonly class BlacklistWord implements Stringable
+final readonly class BlacklistWord implements IdentityKeyedInterface, Stringable
 {
     public const int MIN_LENGTH = 3;
 
@@ -37,6 +38,12 @@ final readonly class BlacklistWord implements Stringable
     public function equals(self $other): bool
     {
         return $this->value === $other->value;
+    }
+
+    #[Override]
+    public function identityKey(): string
+    {
+        return $this->value;
     }
 
     #[Override]

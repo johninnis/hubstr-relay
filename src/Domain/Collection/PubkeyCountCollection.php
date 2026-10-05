@@ -19,19 +19,14 @@ final class PubkeyCountCollection extends TypedCollection
         return PubkeyCount::class;
     }
 
-    private static function tryParse(mixed $value): ?PubkeyCount
-    {
-        return is_array($value) ? PubkeyCount::tryFromArray($value) : null;
-    }
-
     public static function fromRows(mixed $rows): self
     {
-        return self::fromEach($rows, self::tryParse(...));
+        return self::fromEach($rows, PubkeyCount::tryFromArray(...));
     }
 
     public static function tryFromArray(mixed $values): ?self
     {
-        return self::tryFromEach($values, self::tryParse(...));
+        return self::tryFromEach($values, PubkeyCount::tryFromArray(...));
     }
 
     /**
