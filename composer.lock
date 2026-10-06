@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "221accb9859fc2cbf111d9980c989675",
+    "content-hash": "cdd7d8337293cd51ac03e6ee1d46d7ab",
     "packages": [
         {
             "name": "amphp/amp",
@@ -1749,16 +1749,16 @@
         },
         {
             "name": "innis/nostr-core",
-            "version": "v0.9.2",
+            "version": "v0.9.4",
             "source": {
                 "type": "git",
                 "url": "https://github.com/johninnis/nostr-core.git",
-                "reference": "69e07b2fa27cbdd5a3845c1d5721b2f12a50b1af"
+                "reference": "b30a77913625811e4aab6bad88aa1d01a4fe6313"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/johninnis/nostr-core/zipball/69e07b2fa27cbdd5a3845c1d5721b2f12a50b1af",
-                "reference": "69e07b2fa27cbdd5a3845c1d5721b2f12a50b1af",
+                "url": "https://api.github.com/repos/johninnis/nostr-core/zipball/b30a77913625811e4aab6bad88aa1d01a4fe6313",
+                "reference": "b30a77913625811e4aab6bad88aa1d01a4fe6313",
                 "shasum": ""
             },
             "require": {
@@ -1811,22 +1811,22 @@
             ],
             "support": {
                 "issues": "https://github.com/johninnis/nostr-core/issues",
-                "source": "https://github.com/johninnis/nostr-core/tree/v0.9.2"
+                "source": "https://github.com/johninnis/nostr-core/tree/v0.9.4"
             },
-            "time": "2026-10-04T07:49:26+00:00"
+            "time": "2026-10-06T08:47:25+00:00"
         },
         {
             "name": "innis/nostr-relay",
-            "version": "v0.10.0",
+            "version": "v0.11.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/johninnis/nostr-relay.git",
-                "reference": "ced3fd991e88c97ed119badff4106f6c5c656a4a"
+                "reference": "e06566c45f983e0c1d3effa59b3a7441a5e3b430"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/johninnis/nostr-relay/zipball/ced3fd991e88c97ed119badff4106f6c5c656a4a",
-                "reference": "ced3fd991e88c97ed119badff4106f6c5c656a4a",
+                "url": "https://api.github.com/repos/johninnis/nostr-relay/zipball/e06566c45f983e0c1d3effa59b3a7441a5e3b430",
+                "reference": "e06566c45f983e0c1d3effa59b3a7441a5e3b430",
                 "shasum": ""
             },
             "require": {
@@ -1875,9 +1875,9 @@
             ],
             "support": {
                 "issues": "https://github.com/johninnis/nostr-relay/issues",
-                "source": "https://github.com/johninnis/nostr-relay/tree/v0.10.0"
+                "source": "https://github.com/johninnis/nostr-relay/tree/v0.11.0"
             },
-            "time": "2026-10-05T02:33:05+00:00"
+            "time": "2026-10-06T08:55:38+00:00"
         },
         {
             "name": "kelunik/certificate",

@@ -10,6 +10,7 @@ use Innis\Hubstr\Relay\Domain\Exception\MalformedEventRowException;
 use Innis\Hubstr\Relay\Domain\Service\TagValueNormaliser;
 use Innis\Hubstr\Relay\Domain\ValueObject\RawEvent;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
+use Innis\Nostr\Core\Domain\Service\ExpirationDerivation;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventId;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
@@ -69,7 +70,7 @@ final readonly class EventQueryStore implements RawEventQueryInterface
         );
 
         // Deliberate: fromOwnStore is never parsed — rows written since v0.2.0 hold EncodedEvent::of() output, and rows from before hold the bytes of an event verified at admission — see ADR-0034
-        return new StoredEvent($header, StoredEvent::earliestExpiry($statedExpiries), EncodedEvent::fromOwnStore($match['raw']));
+        return new StoredEvent($header, ExpirationDerivation::earliestStated($statedExpiries), EncodedEvent::fromOwnStore($match['raw']));
     }
 
     /**

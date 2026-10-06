@@ -26,7 +26,7 @@
         "amphp/sync": "^2",
         "innis/hubstr-core": "^0.2",
         "innis/nostr-core": "^0.9",
-        "innis/nostr-relay": "^0.10",
+        "innis/nostr-relay": "^0.11",
         "psr/log": "^3.0",
         "revolt/event-loop": "^1"
     },
