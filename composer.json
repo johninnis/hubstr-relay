@@ -63,7 +63,8 @@
         "fix-style": "php-cs-fixer fix",
         "check-style": "php-cs-fixer fix --dry-run --diff",
         "rector": "rector process",
-        "check-rector": "rector process --dry-run"
+        "check-rector": "rector process --dry-run",
+        "check-path-lengths": "check-path-lengths"
     },
     "config": {
         "sort-packages": true

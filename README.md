@@ -240,6 +240,7 @@ composer fix-style         # PHP-CS-Fixer
 composer check-style       # Dry-run style check
 composer rector            # Apply the PHP 8.4 modernisation rules
 composer check-rector      # Dry-run Rector check
+composer check-path-lengths  # No tracked path component over 95 characters
 ```
 
 Two shell harnesses drive a real relay process over the network with [nak](https://github.com/fiatjaf/nak), against a throwaway config and database on a free port; the fixture they share lives in `tools/lib/relay-under-test.sh`:
