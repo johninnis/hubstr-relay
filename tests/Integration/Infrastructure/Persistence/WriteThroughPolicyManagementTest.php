@@ -7,6 +7,7 @@ namespace Innis\Hubstr\Relay\Tests\Integration\Infrastructure\Persistence;
 use Innis\Hubstr\Core\Infrastructure\Persistence\SchemaMigrator;
 use Innis\Hubstr\Core\Infrastructure\Persistence\SqliteDatabase;
 use Innis\Hubstr\Relay\Domain\Collection\TagPrefixRequirementCollection;
+use Innis\Hubstr\Relay\Domain\Exception\MalformedSettingException;
 use Innis\Hubstr\Relay\Domain\ValueObject\BlacklistWord;
 use Innis\Hubstr\Relay\Domain\ValueObject\BlockedIp;
 use Innis\Hubstr\Relay\Domain\ValueObject\GuestPolicy;
@@ -144,7 +145,7 @@ final class WriteThroughPolicyManagementTest extends TestCase
     public function testTagPrefixRequirementSurvivesAReload(): void
     {
         $requirements = new TagPrefixRequirementCollection([
-            new TagPrefixRequirement(TagType::rootExternalContent(), ['https://www.example.com/']),
+            new TagPrefixRequirement(TagType::rootExternalContent(), ['https://www.example.com/'], EventKindCollection::fromInts([EventKind::COMMENT])),
         ]);
         $this->store->setGuestPolicy(new GuestPolicy(
             GuestReadPolicy::defaults(),
@@ -158,6 +159,18 @@ final class WriteThroughPolicyManagementTest extends TestCase
             $loaded->getWrite()->getTagPrefixRequirements(),
             'The rule is stored as JSON in settings, so a relay restart must bring back the same admission constraint.',
         );
+    }
+
+    public function testAStoredTagPrefixRuleWithoutKindsStopsTheLoadRatherThanBeingDropped(): void
+    {
+        $this->pdo->prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 0)')->execute([
+            'guest_policy',
+            '{"write":{"kinds":[1111],"tagged_to_tenant":false,"tag_prefixes":[{"tag":"I","prefixes":["https://www.example.com/"]}]}}',
+        ]);
+
+        $this->expectException(MalformedSettingException::class);
+
+        $this->freshState();
     }
 
     public function testRateLimitsPersistAndLoad(): void

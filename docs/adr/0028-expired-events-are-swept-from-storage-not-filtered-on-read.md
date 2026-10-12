@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-NIP-40 lets an event carry an `expiration` tag and asks a relay not to send such an event to clients once that time has passed. It permits, but does not require, deleting expired events.
+NIP-40 lets an event carry an `expiration` tag, the instant at which the event "SHOULD be considered expired (by relays and clients) and SHOULD be deleted by relays". It asks a relay not to send an expired event ("Relays SHOULD NOT send expired events to clients, even if they are stored") and to drop one published to it already expired, and it lets a relay delete late: "Relays MAY NOT delete expired messages immediately on expiration and MAY persist them indefinitely."
 
 nostr-relay implements the reading half for every host built on it (nostr-relay ADR-0014): an already-expired event is refused on arrival, and an event that expired while stored is withheld from a REQ result. Neither touches the store, and that record is explicit that what happens to the rows is the host's business. Until the host decides, an expired event keeps its row, keeps its disk, and is still counted by a NIP-45 COUNT, still aggregated into the explore and stats figures, and still written out by the export tool.
 
@@ -25,7 +25,7 @@ The first is to filter on read: the `expiration` tag is indexed in `event_tags` 
 
 Roughly double on the tag and mention reads and close to four times on search, paid on every read for ever, and paid to hide a fraction of a percent of rows: in that corpus fewer than one event in two thousand carries an expiration tag at all. The cost lands precisely on the queries that were already the expensive ones, because the predicate is an index probe for every row the planner considers and the planner considers rows before the limit applies.
 
-The second is to delete, which is what the specification actually contemplates. An expired event is not a row to be hidden on every future query, it is a row that should no longer exist. Removing it makes every path correct at once, with no predicate anywhere. Measured on the same corpus, finding a chunk of expired events takes 0.9 ms, because `event_tags` is keyed on `(tag_name, tag_value, event_id)` and the lookup is a range scan over expiration rows alone; deleting 602 of them, with their tags and their search-index rows, takes 182 ms once.
+The second is to delete, which is what the specification asks for. An expired event is not a row to be hidden on every future query, it is a row that should no longer exist. Removing it makes every path correct at once, with no predicate anywhere. Measured on the same corpus, finding a chunk of expired events takes 0.9 ms, because `event_tags` is keyed on `(tag_name, tag_value, event_id)` and the lookup is a range scan over expiration rows alone; deleting 602 of them, with their tags and their search-index rows, takes 182 ms once.
 
 ## Decision
 
@@ -52,3 +52,4 @@ Ten minutes is the window the stats rotation already takes, so nothing this rela
 - A sweep that removes nothing is not logged. It runs every ten minutes and would otherwise announce its own idleness on that cadence, so a chunked delete reports only a completion that removed at least one event; a ban, which is started by an operator, is reported the same way.
 - Do not add the `NOT EXISTS` predicate to the query builder. It is a one-line change that reads like an obvious omission, and the table above is why it is not there.
 - Do not add an `expiration` column to `events` to make that predicate cheap. It buys only the ten-minute window, costs a migration over every stored event, and puts a second definition of expiry into SQL beside the one the library already applies.
+- Shared decisions: nostr-adrs ADR-0011 and ADR-0034.

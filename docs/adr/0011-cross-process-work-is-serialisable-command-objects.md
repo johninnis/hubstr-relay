@@ -8,7 +8,7 @@ Accepted
 
 Database work runs on worker processes reached over amphp channels (ADR-0010). The main process and a worker therefore do not share memory: anything sent between them is serialised, sent as bytes, and rebuilt on the far side. A closure, a bound handler, or an object holding a live connection or socket cannot cross that boundary.
 
-This rules out the obvious in-process shapes. The main process cannot hand the worker a callback to run, nor a repository instance to call — neither survives serialisation. It needs to express "store these events", "delete these ids for this author", "save this setting", "persist this stat result" as plain data the worker can reconstruct and act on against its own connection.
+This rules out the obvious in-process shapes. The main process cannot hand the worker a callback to run, nor a repository instance to call — neither survives serialisation. It needs to express "store these events", "delete these ids for this deleter", "save this setting", "persist this stat result" as plain data the worker can reconstruct and act on against its own connection.
 
 A single generic message carrying a type tag plus a payload, dispatched by a `match` on the tag inside the worker, is the tempting consolidation: it collapses the many message types into one. But it moves the per-operation logic into one growing switch in the worker, recreating the coupling the worker boundary exists to avoid and forcing every new operation to edit a shared dispatcher.
 

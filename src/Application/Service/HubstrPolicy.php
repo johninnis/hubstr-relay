@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Innis\Hubstr\Relay\Application\Service;
 
 use Innis\Hubstr\Relay\Application\Port\PolicyStateInterface;
-use Innis\Hubstr\Relay\Domain\ValueObject\GuestWritePolicy;
+use Innis\Hubstr\Relay\Domain\Failure\GuestWriteFailure;
 use Innis\Hubstr\Relay\Domain\ValueObject\RelayLimits;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
 use Innis\Nostr\Core\Domain\Collection\PublicKeyCollection;
@@ -58,49 +58,14 @@ final readonly class HubstrPolicy implements RelayPolicyInterface
             return null;
         }
 
-        $writePolicy = $this->policyState->getGuestPolicy()->getWrite();
+        $failure = $this->policyState->getGuestPolicy()->getWrite()->admissionFailure($event->getKind(), $event->getTags(), $this->policyState->getTenantPubkeys());
 
-        if (!$writePolicy->getKinds()->contains($event->getKind())) {
-            return $authenticated
-                ? PolicyRejection::blocked('event kind not allowed')
-                : PolicyRejection::authRequired('authentication required to publish this event kind');
-        }
-
-        $unprovenanced = $this->unmetProvenance($writePolicy, $event);
-
-        if (null !== $unprovenanced) {
-            return $authenticated
-                ? PolicyRejection::blocked($unprovenanced)
-                : PolicyRejection::authRequired('authentication required to publish this event');
-        }
-
-        return null;
-    }
-
-    // Deliberate: the configured provenance checks are alternatives, never conjuncts — see ADR-0019
-    private function unmetProvenance(GuestWritePolicy $writePolicy, Event $event): ?string
-    {
-        $unmet = [];
-
-        if ($writePolicy->isTaggedToTenant()) {
-            if ($this->isTaggedToTenant($event)) {
-                return null;
-            }
-
-            $unmet[] = 'reference a relay tenant';
-        }
-
-        $requirements = $writePolicy->getTagPrefixRequirements();
-
-        if (!$requirements->isEmpty()) {
-            if ($requirements->isSatisfiedBy($event->getTags())) {
-                return null;
-            }
-
-            $unmet[] = 'carry a recognised identifier tag';
-        }
-
-        return [] === $unmet ? null : 'event must '.implode(' or ', $unmet);
+        return match (true) {
+            null === $failure => null,
+            $authenticated => PolicyRejection::blocked($failure->value),
+            GuestWriteFailure::KindNotWritable === $failure => PolicyRejection::authRequired('authentication required to publish this event kind'),
+            default => PolicyRejection::authRequired('authentication required to publish this event'),
+        };
     }
 
     #[Override]
@@ -175,10 +140,5 @@ final readonly class HubstrPolicy implements RelayPolicyInterface
     private function holdsATenant(PublicKeyCollection $pubkeys): bool
     {
         return !$pubkeys->intersect($this->policyState->getTenantPubkeys())->isEmpty();
-    }
-
-    private function isTaggedToTenant(Event $event): bool
-    {
-        return $this->holdsATenant($event->getTags()->getPubkeys());
     }
 }

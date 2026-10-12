@@ -11,6 +11,7 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\Query\FindByFiltersQuery;
 use Innis\Hubstr\Relay\Infrastructure\Worker\ReadWorkerPool;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteCoordinator;
 use Innis\Hubstr\Relay\Tests\Fake\QueueChannel;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
@@ -60,7 +61,7 @@ final class WorkerEventStoreTest extends TestCase
             100,
         );
 
-        $deleted = async(static fn () => $store->deleteByEventIds(new EventIdCollection([]), SignedEventFactory::pubkey('aa')))->await();
+        $deleted = async(static fn () => $store->deleteByEventIds(new EventIdCollection([]), ActingKeysMother::of(SignedEventFactory::pubkey('aa'))))->await();
 
         self::assertSame(3, $deleted);
     }
@@ -78,36 +79,51 @@ final class WorkerEventStoreTest extends TestCase
         self::assertSame(0, $deleted);
     }
 
-    public function testFindByFiltersQueriesTheReadPool(): void
+    public function testFindByFiltersAnswersWhatTheReadPoolReturns(): void
     {
-        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'hello');
-        $stored = new StoredEventCollection([StoredEvent::of($event)]);
-        $readChannel = new QueueChannel([$stored]);
-        $store = new WorkerEventStore(
-            new WriteCoordinator(new QueueChannel()),
-            new ReadWorkerPool([$readChannel]),
-            100,
-        );
+        $stored = $this->storedNote();
 
-        $result = $store->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]));
+        self::assertSame($stored, self::storeReadingFrom(new QueueChannel([$stored]))->findByFilters(self::textNotes(), ActingKeysMother::anonymous()));
+    }
 
-        self::assertSame($stored, $result);
+    public function testFindByFiltersSendsAFindByFiltersQueryToTheReadPool(): void
+    {
+        $readChannel = new QueueChannel([$this->storedNote()]);
+        self::storeReadingFrom($readChannel)->findByFilters(self::textNotes(), ActingKeysMother::anonymous());
+
         self::assertInstanceOf(FindByFiltersQuery::class, $readChannel->sent[0]);
     }
 
-    public function testCountByFiltersQueriesTheReadPool(): void
+    public function testCountByFiltersAnswersWhatTheReadPoolReturns(): void
+    {
+        self::assertEquals(EventCount::approximate(7), self::storeReadingFrom(new QueueChannel([EventCount::approximate(7)]))->countByFilters(self::textNotes(), ActingKeysMother::anonymous()));
+    }
+
+    public function testCountByFiltersSendsACountByFiltersQueryToTheReadPool(): void
     {
         $readChannel = new QueueChannel([EventCount::approximate(7)]);
-        $store = new WorkerEventStore(
+        self::storeReadingFrom($readChannel)->countByFilters(self::textNotes(), ActingKeysMother::anonymous());
+
+        self::assertInstanceOf(CountByFiltersQuery::class, $readChannel->sent[0]);
+    }
+
+    private function storedNote(): StoredEventCollection
+    {
+        return new StoredEventCollection([StoredEvent::of(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'hello'))]);
+    }
+
+    private static function storeReadingFrom(QueueChannel $readChannel): WorkerEventStore
+    {
+        return new WorkerEventStore(
             new WriteCoordinator(new QueueChannel()),
             new ReadWorkerPool([$readChannel]),
             100,
         );
+    }
 
-        $count = $store->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]));
-
-        self::assertEquals(EventCount::approximate(7), $count);
-        self::assertInstanceOf(CountByFiltersQuery::class, $readChannel->sent[0]);
+    private static function textNotes(): FilterCollection
+    {
+        return new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]);
     }
 
     public function testFindByFiltersThrowsWhenTheWorkerResultIsNotStoredEvents(): void
@@ -120,7 +136,7 @@ final class WorkerEventStoreTest extends TestCase
 
         $this->expectException(WorkerResultException::class);
 
-        $store->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]));
+        $store->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous());
     }
 
     public function testCountByFiltersThrowsWhenTheWorkerResultIsNotAnEventCount(): void
@@ -133,6 +149,6 @@ final class WorkerEventStoreTest extends TestCase
 
         $this->expectException(WorkerResultException::class);
 
-        $store->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]));
+        $store->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous());
     }
 }

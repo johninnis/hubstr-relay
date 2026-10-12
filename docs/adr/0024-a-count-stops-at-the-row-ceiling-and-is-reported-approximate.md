@@ -14,7 +14,7 @@ A second question comes with the ceiling: what a COUNT of several filters means.
 
 ## Decision
 
-`EventQueryStore::countByFilters` gathers the ids each filter matches, at most `max_limit` of them per filter, and counts the union. That is the same set, de-duplicated the same way, that `findRawJsonByFilters` returns for those filters, so the store answers one question one way. What the relay then does with that set still differs on one point: a REQ withholds an event that has expired since it was stored and a count does not (ADR-0028).
+`EventQueryStore::countByFilters` gathers the ids each filter matches, at most `max_limit` of them per filter, and counts the union. That is the same set, de-duplicated the same way, that `findByFilters` returns for those filters, so the store answers one question one way. What the relay then does with that set still differs on one point: a REQ withholds an event that has expired since it was stored and a count does not (ADR-0028).
 
 The reported number never exceeds `max_limit`, the same ceiling a REQ may return. The answer is approximate when any filter reached the ceiling, or when the union is larger than it: the relay then sends `"approximate": true` with the capped count. Below the ceiling the count is exact and the key is absent.
 
@@ -28,3 +28,4 @@ The ceiling is one number for every client, tenant or guest. A tenant wanting a 
 - A client can never mistake a ceiling for a total, because the reply says which it received.
 - Do not raise the count ceiling independently of `max_limit`, and do not give tenants an uncapped count "because they are trusted": the cost is the same whoever asks, and the totals a tenant needs are served from the cache.
 - Do not drop the approximate flag to make replies uniform. A capped count without it is a wrong answer.
+- Shared decision: nostr-adrs ADR-0033.

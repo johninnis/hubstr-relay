@@ -7,6 +7,7 @@ namespace Innis\Hubstr\Relay\Infrastructure\Persistence;
 use Innis\Hubstr\Relay\Application\Port\PolicyStateInterface;
 use Innis\Hubstr\Relay\Domain\Collection\BlacklistWordCollection;
 use Innis\Hubstr\Relay\Domain\Collection\BlockedIpCollection;
+use Innis\Hubstr\Relay\Domain\Exception\MalformedSettingException;
 use Innis\Hubstr\Relay\Domain\Service\BlacklistFilter;
 use Innis\Hubstr\Relay\Domain\ValueObject\BlacklistWord;
 use Innis\Hubstr\Relay\Domain\ValueObject\BlockedIp;
@@ -219,7 +220,8 @@ final class PolicyState implements PolicyStateInterface, ConnectionGateInterface
         $data = $this->readStore->settingObject(SettingKey::GuestPolicy);
 
         if (null !== $data) {
-            $this->setGuestPolicy(GuestPolicy::fromArray($data));
+            // Deliberate: a stored rule that no longer parses stops the load; dropping it would widen what guests may write — see ADR-0044
+            $this->setGuestPolicy(GuestPolicy::tryFromArray($data) ?? throw new MalformedSettingException(sprintf('The stored %s setting holds a write.tag_prefixes rule that does not parse: each rule needs a tag, at least one non-empty prefix and at least one kind', SettingKey::GuestPolicy->value)));
         }
     }
 

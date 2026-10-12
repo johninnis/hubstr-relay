@@ -25,6 +25,7 @@ NIP-42 is a tenant-only offer to lift to full scope, never a connection gate.
 
 - NIP-42-incapable NIP-46 clients keep working as guests; the only party ever prompted to AUTH is the tenant's own bunker, which can answer.
 - Authentication is identity-bearing and tenant-only: completing the AUTH handshake with a non-tenant key widens nothing.
-- An authenticated tenant's REQ returns at most `max_limit` events per filter, the same as a guest's, and finds that number published as `max_limit` in the relay-information document. Do not move the clamp below the tenant check to complete the exemption; nostr-relay ADR-0019 records why that limit is deliberately not among them.
-- The readable-kinds set is recorded in ADR-0007, the gift-wrap exclusion in ADR-0017, and the residual NIP-46 metadata leak in ADR-0013.
+- An authenticated tenant's REQ returns at most `max_limit` events per filter, the same as a guest's, and finds that number published as `max_limit` in the relay-information document. Do not move the clamp below the tenant check to complete the exemption; nostr-relay ADR-0027 records why that limit is deliberately not among them.
+- The lift stops at gift wraps: innis/nostr-relay confines them to the key a connection authenticated as for every reader, a tenant included (ADR-0036).
+- The readable-kinds set is recorded in ADR-0007, the gift-wrap exclusion in ADR-0036, and the residual NIP-46 metadata leak in ADR-0013.
 - Do not add a connect-time challenge, and do not let non-tenants authenticate — either change re-breaks the NIP-46 client workload this posture exists to support.

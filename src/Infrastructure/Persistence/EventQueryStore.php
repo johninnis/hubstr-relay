@@ -9,7 +9,9 @@ use Innis\Hubstr\Relay\Application\Port\RawEventQueryInterface;
 use Innis\Hubstr\Relay\Domain\Exception\MalformedEventRowException;
 use Innis\Hubstr\Relay\Domain\Service\TagValueNormaliser;
 use Innis\Hubstr\Relay\Domain\ValueObject\RawEvent;
+use Innis\Nostr\Core\Domain\Collection\EventKindCollection;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
+use Innis\Nostr\Core\Domain\Collection\PublicKeyCollection;
 use Innis\Nostr\Core\Domain\Service\ExpirationDerivation;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventId;
@@ -17,7 +19,9 @@ use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\TagType;
+use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
+use Innis\Nostr\Relay\Domain\ValueObject\ActingKeys;
 use Innis\Nostr\Relay\Domain\ValueObject\EncodedEvent;
 use Innis\Nostr\Relay\Domain\ValueObject\EventHeader;
 use Innis\Nostr\Relay\Domain\ValueObject\StoredEvent;
@@ -26,8 +30,10 @@ use PDO;
 
 final readonly class EventQueryStore implements RawEventQueryInterface
 {
-    // Deliberate: SQLite binds at most 32766 parameters per statement by default and one filter is one statement binding each of its values, so the relay's per-filter value ceiling stays below that with room for the tag names, the scalar bounds and the tenants and kinds guest scoping adds — see ADR-0038
+    // Deliberate: SQLite binds at most 32766 parameters per statement by default and one filter is one statement binding each of its values, so the relay's per-filter value ceiling stays below that with room for the tag names, the scalar bounds and the four parameters the reader's gift-wrap condition binds however many keys it holds; a statement guest scoping grows past the limit with tenants and kinds is split — see ADR-0038 and ADR-0045
     public const int MAX_FILTER_VALUES = 30_000;
+
+    private const int SQLITE_PARAMETER_LIMIT = 32_766;
 
     private const int EXPIRY_LOOKUP_CHUNK = 500;
 
@@ -37,17 +43,17 @@ final readonly class EventQueryStore implements RawEventQueryInterface
     }
 
     // Deliberate: stored events, read from indexed columns and the stored bytes, never parsed — see ADR-0035
-    public function findByFilters(FilterCollection $filters): StoredEventCollection
+    public function findByFilters(FilterCollection $filters, ActingKeys $reader): StoredEventCollection
     {
         $matches = [];
 
         foreach ($filters as $filter) {
-            foreach ($this->queryEvents($filter) as $eventId => $match) {
+            foreach ($this->queryEvents($filter, $reader) as $eventId => $match) {
                 $matches[$eventId] = $match;
             }
         }
 
-        uasort($matches, static fn (array $a, array $b): int => [$b['created_at'], $a['id']] <=> [$a['created_at'], $b['id']]);
+        uasort($matches, self::newestFirst(...));
 
         $statedExpiries = $this->statedExpiries(array_column($matches, 'id'));
 
@@ -70,7 +76,7 @@ final readonly class EventQueryStore implements RawEventQueryInterface
         );
 
         // Deliberate: fromOwnStore is never parsed — rows written since v0.2.0 hold EncodedEvent::of() output, and rows from before hold the bytes of an event verified at admission — see ADR-0034
-        return new StoredEvent($header, ExpirationDerivation::earliestStated($statedExpiries), EncodedEvent::fromOwnStore($match['raw']));
+        return new StoredEvent($header, Timestamp::fromInt($match['created_at']), ExpirationDerivation::earliestStated($statedExpiries), EncodedEvent::fromOwnStore($match['raw']));
     }
 
     /**
@@ -100,13 +106,13 @@ final readonly class EventQueryStore implements RawEventQueryInterface
     }
 
     // Deliberate: a count stops at the ceiling and says so, and counts the union the filter set matches rather than summing the filters — see ADR-0024
-    public function countByFilters(FilterCollection $filters, int $limit): EventCount
+    public function countByFilters(FilterCollection $filters, ActingKeys $reader, int $limit): EventCount
     {
         $matched = [];
         $capped = false;
 
         foreach ($filters as $filter) {
-            $eventIds = $this->queryEventIds($filter, $limit);
+            $eventIds = $this->queryEventIds($filter, $reader, $limit);
             $capped = $capped || count($eventIds) >= $limit;
 
             foreach ($eventIds as $eventId) {
@@ -124,7 +130,7 @@ final readonly class EventQueryStore implements RawEventQueryInterface
     #[Override]
     public function findRawByFilter(Filter $filter): Generator
     {
-        [$where, $params, $joins] = $this->buildWhereClause($filter);
+        [$where, $params, $joins] = self::whereClause(...self::filterConditions($filter));
 
         $sql = "SELECT e.event_id, e.raw_event FROM events e {$joins} {$where} ORDER BY e.created_at ASC";
         $stmt = $this->pdo->prepare($sql);
@@ -148,13 +154,41 @@ final readonly class EventQueryStore implements RawEventQueryInterface
     }
 
     /**
+     * @param array{created_at: int, id: string} $a
+     * @param array{created_at: int, id: string} $b
+     */
+    private static function newestFirst(array $a, array $b): int
+    {
+        return [$b['created_at'], $a['id']] <=> [$a['created_at'], $b['id']];
+    }
+
+    /**
      * @return array<string, array{created_at: int, id: string, pubkey: string, kind: int, raw: string}>
      */
-    private function queryEvents(Filter $filter): array
+    private function queryEvents(Filter $filter, ActingKeys $reader): array
     {
-        [$where, $params, $joins] = $this->buildWhereClause($filter);
+        $matches = [];
 
-        $sql = "SELECT e.event_id, e.pubkey, e.kind, e.created_at, e.raw_event FROM events e {$joins} {$where} ORDER BY e.created_at DESC";
+        foreach (self::bindableParts($filter, $reader) as $part) {
+            $matches += $this->queryPart($part, $reader);
+        }
+
+        uasort($matches, self::newestFirst(...));
+
+        $limit = $filter->getLimit();
+
+        return null === $limit ? $matches : array_slice($matches, 0, $limit, true);
+    }
+
+    /**
+     * @return array<string, array{created_at: int, id: string, pubkey: string, kind: int, raw: string}>
+     */
+    private function queryPart(Filter $filter, ActingKeys $reader): array
+    {
+        [$where, $params, $joins] = self::readClause($filter, $reader);
+
+        // Deliberate: of two events created at once the lower id comes first, so a filter cut to its limit keeps the events NIP-01 orders first — see nostr-relay ADR-0039
+        $sql = "SELECT e.event_id, e.pubkey, e.kind, e.created_at, e.raw_event FROM events e {$joins} {$where} ORDER BY e.created_at DESC, e.event_id ASC";
 
         // Deliberate: a filter that states no limit is not bounded here; the policy gives every filter the ceiling before it reaches the store — see nostr-relay ADR-0024
         $limit = $filter->getLimit();
@@ -193,22 +227,96 @@ final readonly class EventQueryStore implements RawEventQueryInterface
     /**
      * @return list<string>
      */
-    private function queryEventIds(Filter $filter, int $limit): array
+    private function queryEventIds(Filter $filter, ActingKeys $reader, int $limit): array
     {
-        [$where, $params, $joins] = $this->buildWhereClause($filter);
-        $params[] = $limit;
+        $eventIds = [];
 
-        $sql = "SELECT e.event_id FROM events e {$joins} {$where} LIMIT ?";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($params);
+        foreach (self::bindableParts($filter, $reader) as $part) {
+            [$where, $params, $joins] = self::readClause($part, $reader);
+            $params[] = $limit;
 
-        return array_values(array_filter($stmt->fetchAll(PDO::FETCH_COLUMN), is_string(...)));
+            $stmt = $this->pdo->prepare("SELECT e.event_id FROM events e {$joins} {$where} LIMIT ?");
+            $stmt->execute($params);
+
+            foreach (array_filter($stmt->fetchAll(PDO::FETCH_COLUMN), is_string(...)) as $eventId) {
+                $eventIds[$eventId] = $eventId;
+            }
+        }
+
+        return array_values($eventIds);
+    }
+
+    // Deliberate: a filter whose statement would bind more than SQLite allows, which only the tenants and readable kinds guest scoping adds can cause, is read in parts split on its longer list of authors or kinds; the parts' union is what the filter matches — see ADR-0045
+    /**
+     * @return list<Filter>
+     */
+    private static function bindableParts(Filter $filter, ActingKeys $reader): array
+    {
+        [, $params] = self::readClause($filter, $reader);
+        $authors = $filter->getAuthors()?->toArray() ?? [];
+        $kinds = $filter->getKinds()?->toArray() ?? [];
+
+        if (count($params) < self::SQLITE_PARAMETER_LIMIT || max(count($authors), count($kinds)) < 2) {
+            return [$filter];
+        }
+
+        $splitsAuthors = count($authors) >= count($kinds);
+        $values = $splitsAuthors ? $authors : $kinds;
+        $half = intdiv(count($values), 2);
+
+        return array_merge(...array_map(
+            static fn (array $part): array => self::bindableParts(
+                $splitsAuthors ? $filter->withAuthors(new PublicKeyCollection($part)) : $filter->withKinds(new EventKindCollection($part)),
+                $reader,
+            ),
+            [array_slice($values, 0, $half), array_slice($values, $half)],
+        ));
+    }
+
+    // Deliberate: a gift-wrap kind matches only where a p tag names one of the reader's keys, tested on every filter before its limit; a filter naming only gift-wrap kinds tests membership alone, so the planner may drive from the reader's own tag rows — see ADR-0043
+    /**
+     * @return array{list<string>, list<int|string>}
+     */
+    private static function readableBy(Filter $filter, ActingKeys $reader): array
+    {
+        $confinedKinds = $reader->getConfinedKinds()->toInts();
+        $kinds = $filter->getKinds()?->toInts();
+
+        if (null !== $kinds && [] === array_intersect($kinds, $confinedKinds)) {
+            return [[], []];
+        }
+
+        $keys = $reader->getKeys()->toHexes();
+        $addressed = [] === $keys ? null : 'e.event_id IN (SELECT event_id FROM event_tags WHERE tag_name = ? AND tag_value IN (SELECT value FROM json_each(?)))';
+        $addressedParams = [] === $keys ? [] : [TagType::PUBKEY, json_encode($keys, JSON_THROW_ON_ERROR)];
+
+        if (null !== $kinds && [] === array_diff($kinds, $confinedKinds)) {
+            return [[$addressed ?? '1 = 0'], $addressedParams];
+        }
+
+        $otherKind = 'e.kind NOT IN ('.self::placeholders(count($confinedKinds)).')';
+
+        return [
+            [null === $addressed ? $otherKind : "({$otherKind} OR {$addressed})"],
+            [...$confinedKinds, ...$addressedParams],
+        ];
     }
 
     /**
      * @return array{string, list<mixed>, string}
      */
-    private function buildWhereClause(Filter $filter): array
+    private static function readClause(Filter $filter, ActingKeys $reader): array
+    {
+        [$conditions, $params, $joins] = self::filterConditions($filter);
+        [$readerConditions, $readerParams] = self::readableBy($filter, $reader);
+
+        return self::whereClause([...$conditions, ...$readerConditions], [...$params, ...$readerParams], $joins);
+    }
+
+    /**
+     * @return array{list<string>, list<mixed>, string}
+     */
+    private static function filterConditions(Filter $filter): array
     {
         $conditions = [];
         $whereParams = [];
@@ -288,9 +396,23 @@ final readonly class EventQueryStore implements RawEventQueryInterface
             }
         }
 
-        $where = [] === $conditions ? '' : 'WHERE '.implode(' AND ', $conditions);
+        return [$conditions, $whereParams, $joins];
+    }
 
-        return [$where, $whereParams, $joins];
+    /**
+     * @param list<string> $conditions
+     * @param list<mixed>  $params
+     *
+     * @return array{string, list<mixed>, string}
+     */
+    private static function whereClause(array $conditions, array $params, string $joins): array
+    {
+        return [[] === $conditions ? '' : 'WHERE '.implode(' AND ', $conditions), $params, $joins];
+    }
+
+    private static function placeholders(int $count): string
+    {
+        return implode(',', array_fill(0, $count, '?'));
     }
 
     /**

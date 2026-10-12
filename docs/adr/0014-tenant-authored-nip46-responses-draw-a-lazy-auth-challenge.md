@@ -37,4 +37,5 @@ This keeps the lazy, activity-triggered challenge posture of `nostr-relay` ADR-0
 
 - An unauthenticated tenant signer keeps working, rate-limited, as under ADR-0013. Wiring NIP-42 on the signer is **optional** and purely earns rate-limit exemption — nothing regresses if it is absent.
 - Only tenant-authored **kind 24133** draws the challenge. Tenant-authored notes, zap receipts, and other kinds are unaffected; a client's own request (non-tenant author) draws nothing.
-- The challenge is offered once per connection and delivery is immediate (no reject/retry round trip). A cold burst may spend a few Events tokens before auth completes; negligible, since auth is one local round trip and the bucket starts full.
+- The challenge is sent just before the response's `OK true` (nostr-relay ADR-0029). The library withholds it from a write the store refuses as a duplicate, but kind 24133 is ephemeral and never reaches the store, so every admitted response is accepted and carries it.
+- The challenge accompanies each such response until the connection authenticates, every one carrying the same challenge, since a connection holds one; delivery is immediate (no reject/retry round trip). A cold burst may spend a few Events tokens before auth completes; negligible, since auth is one local round trip and the bucket starts full.

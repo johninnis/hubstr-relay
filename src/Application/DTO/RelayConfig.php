@@ -17,7 +17,7 @@ use Override;
 
 final readonly class RelayConfig implements RelayConfigInterface
 {
-    private const array SUPPORTED_NIPS = [1, 9, 11, 40, 42, 45, 50, 70, 86, 98];
+    private const array SUPPORTED_NIPS = [1, 9, 11, 40, 42, 45, 50, 59, 67, 70, 86, 98];
     private const string SOFTWARE = 'https://www.hubstr.xyz/relay/';
     private const string DEFAULT_NAME = 'Hubstr Relay';
     private const int DEFAULT_PORT = 8080;

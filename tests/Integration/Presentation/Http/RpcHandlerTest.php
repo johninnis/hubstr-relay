@@ -350,8 +350,8 @@ final class RpcHandlerTest extends TestCase
                 'kinds' => [1111],
                 'tagged_to_tenant' => false,
                 'tag_prefixes' => [
-                    ['tag' => 'I', 'prefixes' => ['https://www.example.com/']],
-                    ['tag' => 'i', 'prefixes' => ['https://www.example.com/']],
+                    ['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [1111]],
+                    ['tag' => 'i', 'prefixes' => ['https://www.example.com/'], 'kinds' => [1, 17]],
                 ],
             ],
         ];
@@ -361,30 +361,44 @@ final class RpcHandlerTest extends TestCase
 
         $this->assertSame(
             [
-                ['tag' => 'I', 'prefixes' => ['https://www.example.com/']],
-                ['tag' => 'i', 'prefixes' => ['https://www.example.com/']],
+                ['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [1111]],
+                ['tag' => 'i', 'prefixes' => ['https://www.example.com/'], 'kinds' => [1, 17]],
             ],
             self::arr(self::arr(self::arr($data['result'])['write'])['tag_prefixes']),
         );
     }
 
-    public function testAnExplicitNullClearsTheTagPrefixRule(): void
+    public function testATagPrefixRuleListingAKindTwiceIsStoredAndReturnedWithItOnce(): void
     {
-        $withRule = [
+        $policy = [
             'read' => ['kinds' => [1111], 'from_tenants_only' => false],
             'write' => [
-                'kinds' => [1111],
+                'kinds' => [1111, 1],
                 'tagged_to_tenant' => false,
-                'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/']]],
+                'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [1111, 1, 1111]]],
             ],
         ];
-        $this->authenticatedRpc(json_encode(['method' => 'setguestpolicy', 'params' => [$withRule]], JSON_THROW_ON_ERROR));
+        $this->authenticatedRpc(json_encode(['method' => 'setguestpolicy', 'params' => [$policy]], JSON_THROW_ON_ERROR));
 
-        $cleared = $withRule;
-        $cleared['write']['tag_prefixes'] = null;
-        $response = $this->authenticatedRpc(json_encode(['method' => 'setguestpolicy', 'params' => [$cleared]], JSON_THROW_ON_ERROR));
+        $data = $this->decodeResponse($this->authenticatedRpc('{"method":"getguestpolicy"}'));
 
-        $this->assertSame(HttpStatus::OK, $response->getStatus());
+        $this->assertSame(
+            [['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [1111, 1]]],
+            self::arr(self::arr(self::arr($data['result'])['write'])['tag_prefixes']),
+        );
+    }
+
+    public function testAnExplicitNullForTheTagPrefixRuleIsAccepted(): void
+    {
+        $this->authenticatedRpc(self::setGuestPolicy(self::guestPolicyWithATagPrefixRule()));
+
+        $this->assertSame(HttpStatus::OK, $this->authenticatedRpc(self::setGuestPolicy(self::guestPolicyClearingTheTagPrefixRule()))->getStatus());
+    }
+
+    public function testAnExplicitNullClearsTheTagPrefixRule(): void
+    {
+        $this->authenticatedRpc(self::setGuestPolicy(self::guestPolicyWithATagPrefixRule()));
+        $this->authenticatedRpc(self::setGuestPolicy(self::guestPolicyClearingTheTagPrefixRule()));
 
         $data = $this->decodeResponse($this->authenticatedRpc('{"method":"getguestpolicy"}'));
         $this->assertSame([], self::arr(self::arr($data['result'])['write'])['tag_prefixes']);
@@ -392,21 +406,84 @@ final class RpcHandlerTest extends TestCase
 
     public function testRejectsAGuestPolicyWhoseTagPrefixRuleDoesNotParse(): void
     {
-        $policy = [
-            'read' => ['kinds' => [1111], 'from_tenants_only' => false],
-            'write' => ['kinds' => [1111], 'tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => []]]],
-        ];
-        $body = json_encode(['method' => 'setguestpolicy', 'params' => [$policy]], JSON_THROW_ON_ERROR);
+        $this->assertSame(HttpStatus::BAD_REQUEST, $this->authenticatedRpc(self::setGuestPolicy(self::guestPolicyWithAnUnparseableTagPrefixRule()))->getStatus());
+    }
 
-        $response = $this->authenticatedRpc($body);
-
-        $this->assertSame(HttpStatus::BAD_REQUEST, $response->getStatus());
+    public function testARefusedGuestPolicyLeavesTheStoredPolicyUntouched(): void
+    {
+        $this->authenticatedRpc(self::setGuestPolicy(self::guestPolicyWithAnUnparseableTagPrefixRule()));
 
         $data = $this->decodeResponse($this->authenticatedRpc('{"method":"getguestpolicy"}'));
-        $this->assertTrue(
-            self::arr(self::arr($data['result'])['read'])['from_tenants_only'],
-            'A refused submission must leave the stored policy untouched, not half-applied.',
-        );
+        $this->assertTrue(self::arr(self::arr($data['result'])['read'])['from_tenants_only']);
+    }
+
+    /**
+     * @return array{read: array<string, mixed>, write: array<string, mixed>}
+     */
+    private static function guestPolicyWithATagPrefixRule(): array
+    {
+        return [
+            'read' => ['kinds' => [1111], 'from_tenants_only' => false],
+            'write' => [
+                'kinds' => [1111],
+                'tagged_to_tenant' => false,
+                'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [1111]]],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{read: array<string, mixed>, write: array<string, mixed>}
+     */
+    private static function guestPolicyClearingTheTagPrefixRule(): array
+    {
+        $cleared = self::guestPolicyWithATagPrefixRule();
+        $cleared['write']['tag_prefixes'] = null;
+
+        return $cleared;
+    }
+
+    /**
+     * @return array{read: array<string, mixed>, write: array<string, mixed>}
+     */
+    private static function guestPolicyWithAnUnparseableTagPrefixRule(): array
+    {
+        return [
+            'read' => ['kinds' => [1111], 'from_tenants_only' => false],
+            'write' => ['kinds' => [1111], 'tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => [], 'kinds' => [1111]]]],
+        ];
+    }
+
+    /**
+     * @param array{read: array<string, mixed>, write: array<string, mixed>} $policy
+     */
+    private static function setGuestPolicy(array $policy): string
+    {
+        return json_encode(['method' => 'setguestpolicy', 'params' => [$policy]], JSON_THROW_ON_ERROR);
+    }
+
+    public function testRejectsAGuestPolicyWhoseTagPrefixRuleNamesNoKinds(): void
+    {
+        $policy = [
+            'read' => ['kinds' => [1111], 'from_tenants_only' => false],
+            'write' => ['kinds' => [1111], 'tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/']]]],
+        ];
+
+        $response = $this->authenticatedRpc(json_encode(['method' => 'setguestpolicy', 'params' => [$policy]], JSON_THROW_ON_ERROR));
+
+        $this->assertSame(HttpStatus::BAD_REQUEST, $response->getStatus());
+    }
+
+    public function testRejectsAGuestPolicyWhoseTagPrefixRuleListsNoKind(): void
+    {
+        $policy = [
+            'read' => ['kinds' => [1111], 'from_tenants_only' => false],
+            'write' => ['kinds' => [1111], 'tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => []]]],
+        ];
+
+        $response = $this->authenticatedRpc(json_encode(['method' => 'setguestpolicy', 'params' => [$policy]], JSON_THROW_ON_ERROR));
+
+        $this->assertSame(HttpStatus::BAD_REQUEST, $response->getStatus());
     }
 
     public function testSetAndGetRateLimits(): void
@@ -621,10 +698,7 @@ final class RpcHandlerTest extends TestCase
             $body,
         );
 
-        $response = $this->handler->handleRequest($request);
-        $this->assertNotNull($response);
-
-        return $response;
+        return $this->handler->handleRequest($request) ?? throw new RuntimeException('The RPC handler answered nothing');
     }
 
     /**
@@ -711,15 +785,11 @@ final class RpcHandlerTest extends TestCase
      */
     private static function arr(mixed $value): array
     {
-        self::assertIsArray($value);
-
-        return $value;
+        return is_array($value) ? $value : throw new RuntimeException(sprintf('Expected an array in the response, found %s', get_debug_type($value)));
     }
 
     private static function str(mixed $value): string
     {
-        self::assertIsString($value);
-
-        return $value;
+        return is_string($value) ? $value : throw new RuntimeException(sprintf('Expected a string in the response, found %s', get_debug_type($value)));
     }
 }

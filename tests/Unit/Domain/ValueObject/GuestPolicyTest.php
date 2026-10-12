@@ -10,33 +10,74 @@ use Innis\Hubstr\Relay\Domain\ValueObject\GuestReadPolicy;
 use Innis\Hubstr\Relay\Domain\ValueObject\GuestWritePolicy;
 use Innis\Hubstr\Relay\Domain\ValueObject\TagPrefixRequirement;
 use Innis\Nostr\Core\Domain\Collection\EventKindCollection;
+use Innis\Nostr\Core\Domain\Collection\PublicKeyCollection;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
+use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\TagType;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class GuestPolicyTest extends TestCase
 {
+    private const string TENANT_HEX = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
     public function testTheDefaultPolicyServesAsADirectMessageInbox(): void
     {
-        $this->assertTrue(GuestPolicy::defaults()->servesAsDirectMessageInbox());
+        $this->assertTrue(GuestPolicy::defaults()->servesAsDirectMessageInbox(self::tenants()));
     }
 
-    #[DataProvider('policiesThatAreNotAnInbox')]
-    public function testAPolicyThatExposesOrRefusesGiftWrapsIsNotAnInbox(GuestPolicy $policy): void
+    public function testARelayWithNoTenantIsNotAnInbox(): void
     {
-        $this->assertFalse($policy->servesAsDirectMessageInbox());
+        $this->assertFalse(GuestPolicy::defaults()->servesAsDirectMessageInbox(new PublicKeyCollection()));
+    }
+
+    #[DataProvider('policiesThatRefuseAWrapAddressedToATenant')]
+    public function testAPolicyThatRefusesAWrapAddressedToATenantIsNotAnInbox(GuestPolicy $policy): void
+    {
+        $this->assertFalse($policy->servesAsDirectMessageInbox(self::tenants()));
     }
 
     /**
      * @return iterable<string, array{GuestPolicy}>
      */
-    public static function policiesThatAreNotAnInbox(): iterable
+    public static function policiesThatRefuseAWrapAddressedToATenant(): iterable
     {
-        yield 'gift wraps guest-readable' => [GuestPolicy::fromArray(['read' => ['kinds' => [EventKind::GIFT_WRAP]]])];
-        yield 'gift wraps global' => [GuestPolicy::fromArray(['read' => ['global_kinds' => [EventKind::GIFT_WRAP]]])];
-        yield 'gift wraps not writable' => [GuestPolicy::fromArray(['write' => ['kinds' => [EventKind::TEXT_NOTE]]])];
-        yield 'wraps need not name a tenant' => [GuestPolicy::fromArray(['write' => ['tagged_to_tenant' => false]])];
+        yield 'gift wraps not writable' => [self::policy(['write' => ['kinds' => [EventKind::TEXT_NOTE]]])];
+        yield 'only a page tag admits' => [self::policy(['write' => ['tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [EventKind::COMMENT]]]]])];
+        yield 'a page tag rule scoped to gift wraps' => [self::policy(['write' => ['tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [EventKind::GIFT_WRAP]]]]])];
+        yield 'a p tag prefix no tenant matches' => [self::policy(['write' => ['tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'p', 'prefixes' => ['bbbb'], 'kinds' => [EventKind::GIFT_WRAP]]]]])];
+        yield 'a p tag prefix the tenant matches, scoped to other kinds' => [self::policy(['write' => ['tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'p', 'prefixes' => ['aaaa'], 'kinds' => [EventKind::TEXT_NOTE]]]]])];
+    }
+
+    #[DataProvider('policiesThatAdmitAWrapAddressedToATenant')]
+    public function testAPolicyThatAdmitsAWrapAddressedToATenantServesAsAnInbox(GuestPolicy $policy): void
+    {
+        $this->assertTrue($policy->servesAsDirectMessageInbox(self::tenants()));
+    }
+
+    /**
+     * @return iterable<string, array{GuestPolicy}>
+     */
+    public static function policiesThatAdmitAWrapAddressedToATenant(): iterable
+    {
+        yield 'gift wraps guest-readable' => [self::policy(['read' => ['kinds' => [EventKind::GIFT_WRAP]]])];
+        yield 'gift wraps global' => [self::policy(['read' => ['global_kinds' => [EventKind::GIFT_WRAP]]])];
+        yield 'a p tag prefix the tenant matches, scoped to gift wraps' => [self::policy(['write' => ['tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'p', 'prefixes' => ['aaaa'], 'kinds' => [EventKind::GIFT_WRAP]]]]])];
+        yield 'no provenance check configured' => [self::policy(['write' => ['tagged_to_tenant' => false]])];
+        yield 'a page tag beside tagged_to_tenant' => [self::policy(['write' => ['tagged_to_tenant' => true, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/'], 'kinds' => [EventKind::COMMENT]]]]])];
+    }
+
+    private static function tenants(): PublicKeyCollection
+    {
+        return new PublicKeyCollection([PublicKey::tryFromHex(self::TENANT_HEX) ?? self::fail('the tenant key did not parse')]);
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private static function policy(array $data): GuestPolicy
+    {
+        return GuestPolicy::tryFromArray($data) ?? self::fail('the guest policy did not parse');
     }
 
     public function testDefaultsHaveExpectedKinds(): void
@@ -144,13 +185,12 @@ final class GuestPolicyTest extends TestCase
 
     public function testFromArrayReadsGlobalKinds(): void
     {
-        $policy = GuestPolicy::fromArray([
-            'read' => ['kinds' => [1], 'global_kinds' => [24133], 'from_tenants_only' => true],
-            'write' => ['kinds' => [1], 'tagged_to_tenant' => true],
-        ]);
+        $this->assertSame([EventKind::NOSTR_CONNECT], self::policyWithAGlobalKind()->getRead()->getGlobalKinds()->toInts());
+    }
 
-        $this->assertSame([EventKind::NOSTR_CONNECT], $policy->getRead()->getGlobalKinds()->toInts());
-        $this->assertTrue($policy->getRead()->getGlobalKinds()->contains(EventKind::fromInt(EventKind::NOSTR_CONNECT)));
+    public function testAGlobalKindReadFromAnArrayIsAGlobalKind(): void
+    {
+        $this->assertTrue(self::policyWithAGlobalKind()->getRead()->getGlobalKinds()->contains(EventKind::fromInt(EventKind::NOSTR_CONNECT)));
     }
 
     public function testIsKindReadable(): void
@@ -169,28 +209,34 @@ final class GuestPolicyTest extends TestCase
         $this->assertFalse($write->getKinds()->contains(EventKind::fromInt(EventKind::METADATA)));
     }
 
-    public function testFromArrayReadsIntegerKinds(): void
+    public function testFromArrayReadsIntegerReadKinds(): void
     {
-        $policy = GuestPolicy::fromArray([
-            'read' => ['kinds' => [1, 7], 'from_tenants_only' => false],
-            'write' => ['kinds' => [7], 'tagged_to_tenant' => false],
-        ]);
-
-        $this->assertSame([1, 7], $policy->getRead()->getKinds()->toInts());
-        $this->assertSame([7], $policy->getWrite()->getKinds()->toInts());
+        $this->assertSame([1, 7], self::policyWithIntegerKinds()->getRead()->getKinds()->toInts());
     }
 
-    public function testFromArrayDropsNonIntegerKinds(): void
+    public function testFromArrayReadsIntegerWriteKinds(): void
     {
-        $policy = GuestPolicy::fromArray([
-            'read' => ['kinds' => ['junk', 1, '9', 7], 'from_tenants_only' => true],
-            'write' => ['kinds' => [null, [], 7], 'tagged_to_tenant' => true],
-        ]);
+        $this->assertSame([7], self::policyWithIntegerKinds()->getWrite()->getKinds()->toInts());
+    }
 
-        $this->assertSame([1, 7], $policy->getRead()->getKinds()->toInts());
-        $this->assertSame([7], $policy->getWrite()->getKinds()->toInts());
-        $this->assertFalse($policy->getRead()->getKinds()->contains(EventKind::fromInt(EventKind::METADATA)));
-        $this->assertFalse($policy->getWrite()->getKinds()->contains(EventKind::fromInt(EventKind::METADATA)));
+    public function testFromArrayDropsNonIntegerReadKinds(): void
+    {
+        $this->assertSame([1, 7], self::policyWithNonIntegerKinds()->getRead()->getKinds()->toInts());
+    }
+
+    public function testFromArrayDropsNonIntegerWriteKinds(): void
+    {
+        $this->assertSame([7], self::policyWithNonIntegerKinds()->getWrite()->getKinds()->toInts());
+    }
+
+    public function testANonIntegerReadKindIsNotReadAsKindZero(): void
+    {
+        $this->assertFalse(self::policyWithNonIntegerKinds()->getRead()->getKinds()->contains(EventKind::fromInt(EventKind::METADATA)));
+    }
+
+    public function testANonIntegerWriteKindIsNotReadAsKindZero(): void
+    {
+        $this->assertFalse(self::policyWithNonIntegerKinds()->getWrite()->getKinds()->contains(EventKind::fromInt(EventKind::METADATA)));
     }
 
     public function testRoundTripsViaArray(): void
@@ -199,13 +245,32 @@ final class GuestPolicyTest extends TestCase
             new GuestReadPolicy(EventKindCollection::fromInts([EventKind::TEXT_NOTE, EventKind::REACTION]), EventKindCollection::fromInts([EventKind::NOSTR_CONNECT]), false),
             new GuestWritePolicy(EventKindCollection::fromInts([EventKind::REACTION, EventKind::ZAP_RECEIPT]), true),
         );
-        $restored = GuestPolicy::fromArray($original->toArray());
 
-        $this->assertEquals($original->getRead()->getKinds(), $restored->getRead()->getKinds());
-        $this->assertEquals($original->getRead()->getGlobalKinds(), $restored->getRead()->getGlobalKinds());
-        $this->assertSame($original->getRead()->isFromTenantsOnly(), $restored->getRead()->isFromTenantsOnly());
-        $this->assertEquals($original->getWrite()->getKinds(), $restored->getWrite()->getKinds());
-        $this->assertSame($original->getWrite()->isTaggedToTenant(), $restored->getWrite()->isTaggedToTenant());
+        $this->assertEquals($original, self::policy($original->toArray()));
+    }
+
+    private static function policyWithAGlobalKind(): GuestPolicy
+    {
+        return self::policy([
+            'read' => ['kinds' => [1], 'global_kinds' => [24133], 'from_tenants_only' => true],
+            'write' => ['kinds' => [1], 'tagged_to_tenant' => true],
+        ]);
+    }
+
+    private static function policyWithIntegerKinds(): GuestPolicy
+    {
+        return self::policy([
+            'read' => ['kinds' => [1, 7], 'from_tenants_only' => false],
+            'write' => ['kinds' => [7], 'tagged_to_tenant' => false],
+        ]);
+    }
+
+    private static function policyWithNonIntegerKinds(): GuestPolicy
+    {
+        return self::policy([
+            'read' => ['kinds' => ['junk', 1, '9', 7], 'from_tenants_only' => true],
+            'write' => ['kinds' => [null, [], 7], 'tagged_to_tenant' => true],
+        ]);
     }
 
     public function testDefaultsRequireNoTagPrefix(): void
@@ -220,11 +285,11 @@ final class GuestPolicyTest extends TestCase
             new GuestWritePolicy(
                 EventKindCollection::fromInts([EventKind::COMMENT]),
                 false,
-                new TagPrefixRequirementCollection([new TagPrefixRequirement(TagType::rootExternalContent(), ['https://www.example.com/'])]),
+                new TagPrefixRequirementCollection([new TagPrefixRequirement(TagType::rootExternalContent(), ['https://www.example.com/'], EventKindCollection::fromInts([EventKind::COMMENT]))]),
             ),
         );
 
-        $restored = GuestPolicy::fromArray($original->toArray());
+        $restored = self::policy($original->toArray());
 
         $this->assertEquals(
             $original->getWrite()->getTagPrefixRequirements(),
@@ -232,16 +297,23 @@ final class GuestPolicyTest extends TestCase
         );
     }
 
-    public function testAnUnparseableTagPrefixRuleLeavesNoRequirement(): void
+    public function testAPolicyWithAnUnparseableTagPrefixRuleDoesNotParse(): void
     {
-        $policy = GuestPolicy::fromArray([
+        $this->assertNull(GuestPolicy::tryFromArray([
             'read' => ['kinds' => [1], 'from_tenants_only' => true],
             'write' => ['kinds' => [1], 'tagged_to_tenant' => false, 'tag_prefixes' => ['tag' => 'I', 'prefixes' => []]],
-        ]);
+        ]));
+    }
 
-        $this->assertTrue(
-            $policy->getWrite()->getTagPrefixRequirements()->isEmpty(),
-            'fromArray stays total; refusing the submission is the RPC boundary\'s job (TenancyRpcHandler).',
-        );
+    public function testAPolicyWhoseTagPrefixRuleNamesNoKindsDoesNotParse(): void
+    {
+        $this->assertNull(GuestPolicy::tryFromArray([
+            'write' => ['kinds' => [EventKind::COMMENT], 'tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'I', 'prefixes' => ['https://www.example.com/']]]],
+        ]));
+    }
+
+    public function testAPolicyWhoseTagPrefixesIsNullCarriesNoRule(): void
+    {
+        $this->assertTrue(self::policy(['write' => ['tag_prefixes' => null]])->getWrite()->getTagPrefixRequirements()->isEmpty());
     }
 }

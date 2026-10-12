@@ -7,7 +7,6 @@ namespace Innis\Hubstr\Relay\Presentation\Http\Rpc;
 use Innis\Hubstr\Relay\Application\Port\PolicyManagementInterface;
 use Innis\Hubstr\Relay\Application\Port\PolicyStateInterface;
 use Innis\Hubstr\Relay\Application\UseCase\RemoveTenantUseCase;
-use Innis\Hubstr\Relay\Domain\Collection\TagPrefixRequirementCollection;
 use Innis\Hubstr\Relay\Domain\Enum\HubstrRpcMethod;
 use Innis\Hubstr\Relay\Domain\Failure\TenantPolicyFailure;
 use Innis\Hubstr\Relay\Domain\ValueObject\GuestPolicy;
@@ -16,7 +15,7 @@ use Override;
 
 final readonly class TenancyRpcHandler implements RpcMethodHandlerInterface
 {
-    private const string INVALID_TAG_PREFIXES = 'Invalid write.tag_prefixes: a list of rules, each naming a tag and at least one non-empty prefix';
+    private const string INVALID_TAG_PREFIXES = 'Invalid write.tag_prefixes: a list of rules, each naming a tag, at least one non-empty prefix and at least one kind';
 
     public function __construct(
         private PolicyStateInterface $policyState,
@@ -73,40 +72,25 @@ final readonly class TenancyRpcHandler implements RpcMethodHandlerInterface
     }
 
     /**
-     * @return array{read: array{kinds: list<int>, global_kinds: list<int>, from_tenants_only: bool}, write: array{kinds: list<int>, tagged_to_tenant: bool, tag_prefixes: list<array{tag: string, prefixes: list<string>}>}}
+     * @return array{read: array{kinds: list<int>, global_kinds: list<int>, from_tenants_only: bool}, write: array{kinds: list<int>, tagged_to_tenant: bool, tag_prefixes: list<array{tag: string, prefixes: list<string>, kinds: list<int>}>}}
      */
     private function getGuestPolicy(): array
     {
         return $this->policyState->getGuestPolicy()->toArray();
     }
 
-    // Deliberate: an unparseable tag prefix rule is refused, never defaulted away — see ADR-0018
+    // Deliberate: an unparseable tag prefix rule is refused, never defaulted away — see ADR-0044
     private function setGuestPolicy(RpcParams $params): true|RpcRejection
     {
-        $submitted = $params->nested(0)->toArray();
+        $policy = GuestPolicy::tryFromArray($params->nested(0)->toArray());
 
-        if (!self::tagPrefixesParse($submitted)) {
+        if (null === $policy) {
             return RpcRejection::badRequest(self::INVALID_TAG_PREFIXES);
         }
 
-        $this->policyManagement->setGuestPolicy(GuestPolicy::fromArray($submitted));
+        $this->policyManagement->setGuestPolicy($policy);
 
         return true;
-    }
-
-    /**
-     * @param array<array-key, mixed> $submitted
-     */
-    private static function tagPrefixesParse(array $submitted): bool
-    {
-        $write = $submitted['write'] ?? null;
-        $declared = is_array($write) ? ($write['tag_prefixes'] ?? null) : null;
-
-        if (null === $declared) {
-            return true;
-        }
-
-        return is_array($declared) && null !== TagPrefixRequirementCollection::tryFromArray($declared);
     }
 
     private static function appliedOr(?TenantPolicyFailure $failure): true|RpcRejection

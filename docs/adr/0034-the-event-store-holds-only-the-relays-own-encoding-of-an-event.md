@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-nostr-relay streams stored events as the bytes the store holds, without parsing or re-encoding them (nostr-relay ADR-0021). That is safe only because of where the bytes came from: a signature covers an event's fields, not the JSON it arrived as, so the relay may send unparsed bytes only for an event it verified. nostr-relay states that as an obligation on the store; this relay's store is where the obligation is met or broken.
+nostr-relay streams stored events as the bytes the store holds, without parsing or re-encoding them (nostr-relay ADR-0039). That is safe only because of where the bytes came from: a signature covers an event's fields, not the JSON it arrived as, so the relay may send unparsed bytes only for an event it verified. nostr-relay states that as an obligation on the store; this relay's store is where the obligation is met or broken.
 
 The events table has one column holding an event's bytes, `raw_event`, and one statement writing it, in `EventWriteStore`. Both write paths reach that statement with an `Event`: the running relay through the write worker, and `bin/import.php` directly (ADR-0008). Neither hands the store a string. So for every row written from now on, the bytes are what `EncodedEvent::of()` produced from an event that passed validation.
 
@@ -35,3 +35,4 @@ Rows written before these rules keep their `raw_event` bytes and have their addr
 - Do not reintroduce a PHP pass that rewrites old rows' bytes. If byte-canonicality of an old database is ever wanted, the export and re-import path provides it.
 - The comment on `raw_event` in migration 0001 describes the column as it was first written. It is left as applied; this record describes what the column holds now.
 - `AddressIdentifierMigrationTest` pins every backfill case — the range boundaries, a Unicode identifier, agreeing, disagreeing, value-less and empty `d` tags, the untouched `raw_event`, replacement of a backfilled row through its `d` tag, and a fresh database — and `ImportEventUseCaseTest` pins that an imported line is stored in the relay's own encoding rather than as written.
+- Shared decision: nostr-adrs ADR-0009.

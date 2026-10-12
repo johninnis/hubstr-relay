@@ -54,6 +54,8 @@ use Innis\Nostr\Relay\Application\Service\AcceptedEventPipeline;
 use Innis\Nostr\Relay\Application\Service\AcceptedEventPublisher;
 use Innis\Nostr\Relay\Application\Service\AuthChallengeIssuer;
 use Innis\Nostr\Relay\Application\Service\ClientMessenger;
+use Innis\Nostr\Relay\Application\Service\DeliveryGate;
+use Innis\Nostr\Relay\Application\Service\EventAcceptance;
 use Innis\Nostr\Relay\Application\Service\EventAdmission;
 use Innis\Nostr\Relay\Application\Service\EventAudience;
 use Innis\Nostr\Relay\Application\Service\EventDeletionProcessor;
@@ -68,6 +70,7 @@ use Innis\Nostr\Relay\Application\UseCase\ProcessEventSubmissionUseCase;
 use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\Entity\RelayClient;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
+use Innis\Nostr\Relay\Domain\ValueObject\ActingKeys;
 use Innis\Nostr\Relay\Domain\ValueObject\ClientId;
 use Innis\Nostr\Relay\Domain\ValueObject\ConnectionInfo;
 use Innis\Nostr\Relay\Domain\ValueObject\EventHeader;
@@ -342,6 +345,74 @@ final class HubstrPolicyTest extends TestCase
 
         $this->assertNotNull($rejection);
         $this->assertTrue($rejection->isAuthRequired());
+    }
+
+    public function testAPageRuleDoesNotAdmitAGiftWrapToAStrangerCarryingThePageTag(): void
+    {
+        $this->requireSiteTagPrefix();
+        $event = $this->createEvent(
+            EventKind::fromInt(EventKind::GIFT_WRAP),
+            $this->guestPubkey,
+            new TagCollection([Tag::pubkey($this->guestPubkey), Tag::fromArray(['I', self::SITE.'john/3/16'])]),
+        );
+
+        $this->assertTrue($this->policy->allowEventSubmission($this->createGuestClient(), $event)?->isAuthRequired());
+    }
+
+    public function testAPageRuleDoesNotAdmitANostrConnectEventCarryingThePageTag(): void
+    {
+        $this->requireSiteTagPrefix();
+        $event = $this->createEvent(
+            EventKind::fromInt(EventKind::NOSTR_CONNECT),
+            $this->guestPubkey,
+            new TagCollection([Tag::pubkey($this->guestPubkey), Tag::fromArray(['I', self::SITE.'john/3/16'])]),
+        );
+
+        $this->assertTrue($this->policy->allowEventSubmission($this->createGuestClient(), $event)?->isAuthRequired());
+    }
+
+    public function testAPageRuleDoesNotAdmitAZapReceiptCarryingThePageTag(): void
+    {
+        $this->requireSiteTagPrefix();
+        $event = $this->createEvent(
+            EventKind::fromInt(EventKind::ZAP_RECEIPT),
+            $this->guestPubkey,
+            new TagCollection([
+                ...$this->zapReceiptTags($this->guestPubkey, withBolt11: true)->toArray(),
+                Tag::fromArray(['I', self::SITE.'john/3/16']),
+            ]),
+            content: '',
+        );
+
+        $this->assertTrue($this->policy->allowEventSubmission($this->createGuestClient(), $event)?->isAuthRequired());
+    }
+
+    public function testAPageRuleAdmitsAReactionToThePageItNames(): void
+    {
+        $this->requireSiteTagPrefix();
+        $event = $this->createEvent(
+            EventKind::fromInt(EventKind::WEBSITE_REACTION),
+            $this->guestPubkey,
+            new TagCollection([Tag::fromArray(['k', 'web']), Tag::fromArray(['i', self::SITE.'john/3/16'])]),
+        );
+
+        $this->assertNull($this->policy->allowEventSubmission($this->createGuestClient(), $event));
+    }
+
+    public function testAGuestGiftWrapToATenantIsAdmittedByATagPrefixItsPTagMeets(): void
+    {
+        $this->allowGuestGiftWraps(new TagPrefixRequirementCollection([
+            new TagPrefixRequirement(TagType::pubkey(), [substr($this->tenantPubkey->toHex(), 0, 4)], EventKindCollection::fromInts([EventKind::GIFT_WRAP])),
+        ]));
+
+        $this->assertNull($this->policy->allowEventSubmission($this->createGuestClient(), $this->giftWrapToTenant()));
+    }
+
+    public function testAGuestGiftWrapToATenantIsAdmittedWhenNoProvenanceCheckIsConfigured(): void
+    {
+        $this->allowGuestGiftWraps(new TagPrefixRequirementCollection());
+
+        $this->assertNull($this->policy->allowEventSubmission($this->createGuestClient(), $this->giftWrapToTenant()));
     }
 
     public function testTenantIsNotSubjectToTheTagPrefixRequirement(): void
@@ -809,14 +880,31 @@ final class HubstrPolicyTest extends TestCase
         $this->policyManagement->setGuestPolicy(new GuestPolicy(
             GuestReadPolicy::defaults(),
             new GuestWritePolicy(
-                EventKindCollection::fromInts([EventKind::COMMENT, EventKind::TEXT_NOTE, EventKind::GIFT_WRAP]),
+                EventKindCollection::fromInts([EventKind::COMMENT, EventKind::TEXT_NOTE, EventKind::WEBSITE_REACTION, EventKind::GIFT_WRAP, EventKind::NOSTR_CONNECT, EventKind::ZAP_RECEIPT]),
                 $taggedToTenant,
                 new TagPrefixRequirementCollection([
-                    new TagPrefixRequirement(TagType::rootExternalContent(), [self::SITE]),
-                    new TagPrefixRequirement(TagType::externalContent(), [self::SITE]),
+                    new TagPrefixRequirement(TagType::rootExternalContent(), [self::SITE], EventKindCollection::fromInts([EventKind::COMMENT])),
+                    new TagPrefixRequirement(TagType::externalContent(), [self::SITE], EventKindCollection::fromInts([EventKind::TEXT_NOTE, EventKind::WEBSITE_REACTION])),
                 ]),
             ),
         ));
+    }
+
+    private function allowGuestGiftWraps(TagPrefixRequirementCollection $tagPrefixRequirements): void
+    {
+        $this->policyManagement->setGuestPolicy(new GuestPolicy(
+            GuestReadPolicy::defaults(),
+            new GuestWritePolicy(EventKindCollection::fromInts([EventKind::GIFT_WRAP]), false, $tagPrefixRequirements),
+        ));
+    }
+
+    private function giftWrapToTenant(): Event
+    {
+        return $this->createEvent(
+            EventKind::fromInt(EventKind::GIFT_WRAP),
+            $this->guestPubkey,
+            new TagCollection([Tag::pubkey($this->tenantPubkey)]),
+        );
     }
 
     private function siteComment(string $url): Event
@@ -915,7 +1003,7 @@ final class HubstrPolicyTest extends TestCase
         $clientMessenger = new ClientMessenger($this->clientManager);
 
         $distributor = new EventDistributor(
-            new EventAudience($this->policy, $this->subscriptionManager, $this->clientManager),
+            new EventAudience(new DeliveryGate($this->policy), $this->subscriptionManager, $this->clientManager),
             $clientMessenger,
             new NullLogger(),
         );
@@ -944,7 +1032,7 @@ final class HubstrPolicyTest extends TestCase
                 ),
                 new PublishingGate($this->policy, $this->authManager, new AuthChallengeIssuer($this->authManager)),
             ),
-            $pipeline,
+            new EventAcceptance($pipeline, new AuthChallengeIssuer($this->authManager)),
             new NullLogger(),
         );
     }
@@ -961,17 +1049,17 @@ final class HubstrPolicyTest extends TestCase
                 return $this->writeStore->store($event);
             }
 
-            public function findByFilters(FilterCollection $filters): StoredEventCollection
+            public function findByFilters(FilterCollection $filters, ActingKeys $reader): StoredEventCollection
             {
                 return new StoredEventCollection([]);
             }
 
-            public function countByFilters(FilterCollection $filters): EventCount
+            public function countByFilters(FilterCollection $filters, ActingKeys $reader): EventCount
             {
                 return EventCount::exact(0);
             }
 
-            public function deleteByEventIds(EventIdCollection $eventIds, PublicKey $author): int
+            public function deleteByEventIds(EventIdCollection $eventIds, ActingKeys $deleter): int
             {
                 return 0;
             }

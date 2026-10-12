@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace Innis\Hubstr\Relay\Domain\ValueObject;
 
+use Innis\Nostr\Core\Domain\Collection\PublicKeyCollection;
+use Innis\Nostr\Core\Domain\Collection\TagCollection;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
+use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
+use Innis\Nostr\Core\Domain\ValueObject\Tag\Tag;
 
 final readonly class GuestPolicy
 {
@@ -22,12 +26,11 @@ final readonly class GuestPolicy
     /**
      * @param array<array-key, mixed> $data
      */
-    public static function fromArray(array $data): self
+    public static function tryFromArray(array $data): ?self
     {
-        return new self(
-            GuestReadPolicy::fromArray((array) ($data['read'] ?? [])),
-            GuestWritePolicy::fromArray((array) ($data['write'] ?? [])),
-        );
+        $write = GuestWritePolicy::tryFromArray((array) ($data['write'] ?? []));
+
+        return null === $write ? null : new self(GuestReadPolicy::fromArray((array) ($data['read'] ?? [])), $write);
     }
 
     public function getRead(): GuestReadPolicy
@@ -40,19 +43,17 @@ final readonly class GuestPolicy
         return $this->write;
     }
 
-    // Deliberate: the inbox is a property of the live policy, so whether NIP-17 is advertised follows it — see ADR-0033
-    public function servesAsDirectMessageInbox(): bool
+    // Deliberate: an inbox admits a wrap addressed to a tenant by whichever provenance route the write policy offers; the read kinds are not asked, because innis/nostr-relay serves a gift wrap only to the key it names whatever they hold — see ADR-0042
+    public function servesAsDirectMessageInbox(PublicKeyCollection $tenants): bool
     {
-        $giftWrap = EventKind::fromInt(EventKind::GIFT_WRAP);
-
-        return $this->write->getKinds()->contains($giftWrap)
-            && $this->write->isTaggedToTenant()
-            && !$this->read->getKinds()->contains($giftWrap)
-            && !$this->read->getGlobalKinds()->contains($giftWrap);
+        return array_any(
+            $tenants->toArray(),
+            fn (PublicKey $tenant): bool => null === $this->write->admissionFailure(EventKind::fromInt(EventKind::GIFT_WRAP), new TagCollection([Tag::pubkey($tenant)]), $tenants),
+        );
     }
 
     /**
-     * @return array{read: array{kinds: list<int>, global_kinds: list<int>, from_tenants_only: bool}, write: array{kinds: list<int>, tagged_to_tenant: bool, tag_prefixes: list<array{tag: string, prefixes: list<string>}>}}
+     * @return array{read: array{kinds: list<int>, global_kinds: list<int>, from_tenants_only: bool}, write: array{kinds: list<int>, tagged_to_tenant: bool, tag_prefixes: list<array{tag: string, prefixes: list<string>, kinds: list<int>}>}}
      */
     public function toArray(): array
     {

@@ -12,6 +12,7 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\ReadWorkerPool;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WorkerFailure;
 use Innis\Hubstr\Relay\Tests\Fake\ControllableChannel;
 use Innis\Hubstr\Relay\Tests\Fake\QueueChannel;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -21,127 +22,188 @@ use function Amp\delay;
 
 final class ReadWorkerPoolTest extends TestCase
 {
-    public function testQueryRoutesThroughAChannelAndReturnsItsResult(): void
+    public function testQueryReturnsTheResultItsChannelAnswers(): void
+    {
+        self::assertSame(42, new ReadWorkerPool([new QueueChannel([42])])->query(self::countQuery()));
+    }
+
+    public function testQueryRoutesTheQueryThroughAChannel(): void
     {
         $channel = new QueueChannel([42]);
-        $pool = new ReadWorkerPool([$channel]);
+        new ReadWorkerPool([$channel])->query(self::countQuery());
 
-        $result = $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100));
-
-        self::assertSame(42, $result);
         self::assertInstanceOf(CountByFiltersQuery::class, $channel->sent[0]);
     }
 
     public function testConcurrentQueriesUseDistinctChannels(): void
     {
-        $first = new ControllableChannel();
-        $second = new ControllableChannel();
-        $pool = new ReadWorkerPool([$first, $second]);
-
-        async(static function () use ($pool, $first, $second): void {
-            $a = async(static fn () => $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100)));
-            delay(0);
-            $b = async(static fn () => $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100)));
-            delay(0);
-
-            self::assertCount(1, $first->sent);
-            self::assertCount(1, $second->sent);
-
-            $first->answer(1);
-            $second->answer(2);
-
-            self::assertSame(1, $a->await());
-            self::assertSame(2, $b->await());
-        })->await();
+        self::assertSame([1, 1], self::twoConcurrentQueries()['in flight per channel']);
     }
 
-    public function testReplacesADeadChannelInsteadOfRecyclingIt(): void
+    public function testEachConcurrentQueryReturnsItsOwnChannelsAnswer(): void
+    {
+        self::assertSame([1, 2], self::twoConcurrentQueries()['answers']);
+    }
+
+    public function testADeadChannelSurfacesItsError(): void
+    {
+        $pool = new ReadWorkerPool([new QueueChannel()], static fn (): Channel => new QueueChannel([42]));
+
+        $this->expectException(ChannelException::class);
+
+        $pool->query(self::countQuery());
+    }
+
+    public function testAQueryAfterADeadChannelIsAnsweredByItsReplacement(): void
+    {
+        $pool = new ReadWorkerPool([new QueueChannel()], static fn (): Channel => new QueueChannel([42]));
+        self::surfaceTheDeadChannel($pool);
+
+        self::assertSame(42, $pool->query(self::countQuery()));
+    }
+
+    public function testAQueryAfterADeadChannelIsSentToItsReplacementRatherThanTheDeadOne(): void
     {
         $replacement = new QueueChannel([42]);
-        $dead = new QueueChannel();
-        $pool = new ReadWorkerPool([$dead], static fn (): Channel => $replacement);
+        $pool = new ReadWorkerPool([new QueueChannel()], static fn (): Channel => $replacement);
+        self::surfaceTheDeadChannel($pool);
+        $pool->query(self::countQuery());
 
-        try {
-            $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100));
-            self::fail('expected the dead channel to surface its error');
-        } catch (ChannelException) {
-        }
-
-        self::assertSame(42, $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100)));
         self::assertInstanceOf(CountByFiltersQuery::class, $replacement->sent[0]);
     }
 
     public function testExhaustsLoudlyWhenAllChannelsFailAndCannotBeReplaced(): void
     {
-        $dead = new QueueChannel();
-        $pool = new ReadWorkerPool([$dead]);
+        $pool = new ReadWorkerPool([new QueueChannel()]);
+        self::surfaceTheDeadChannel($pool);
 
-        try {
-            $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100));
-            self::fail('expected the dead channel to surface its error');
-        } catch (ChannelException) {
-        }
-
-        $this->expectException(WorkerResultException::class);
-        $this->expectExceptionMessage('Read worker pool exhausted');
-        $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100));
+        self::assertStringContainsString('Read worker pool exhausted', self::workerResultFailureOf($pool));
     }
 
     public function testExhaustsLoudlyWhenChannelReplacementFails(): void
     {
-        $dead = new QueueChannel();
-        $pool = new ReadWorkerPool([$dead], static function (): Channel {
+        $pool = new ReadWorkerPool([new QueueChannel()], static function (): Channel {
             throw new RuntimeException('cannot spawn replacement worker');
         });
+        self::surfaceTheDeadChannel($pool);
 
-        try {
-            $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100));
-            self::fail('expected the dead channel to surface its error');
-        } catch (ChannelException) {
-        }
-
-        $this->expectException(WorkerResultException::class);
-        $this->expectExceptionMessage('Read worker pool exhausted');
-        $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100));
+        self::assertStringContainsString('Read worker pool exhausted', self::workerResultFailureOf($pool));
     }
 
-    public function testQueryThrowsOnWorkerFailureButReusesTheChannel(): void
+    public function testAWorkerFailureSurfacesWithItsMessage(): void
+    {
+        $pool = new ReadWorkerPool([new QueueChannel([new WorkerFailure('query exploded'), 7])]);
+
+        self::assertStringContainsString('query exploded', self::workerResultFailureOf($pool));
+    }
+
+    public function testAQueryAfterAWorkerFailureIsAnswered(): void
+    {
+        $pool = new ReadWorkerPool([new QueueChannel([new WorkerFailure('query exploded'), 7])]);
+        self::workerResultFailureOf($pool);
+
+        self::assertSame(7, $pool->query(self::countQuery()));
+    }
+
+    public function testAQueryAfterAWorkerFailureReusesTheSameChannel(): void
     {
         $channel = new QueueChannel([new WorkerFailure('query exploded'), 7]);
         $pool = new ReadWorkerPool([$channel]);
+        self::workerResultFailureOf($pool);
+        $pool->query(self::countQuery());
 
-        try {
-            $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100));
-            self::fail('expected the worker failure to surface');
-        } catch (WorkerResultException $e) {
-            self::assertStringContainsString('query exploded', $e->getMessage());
-        }
-
-        self::assertSame(7, $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100)));
         self::assertCount(2, $channel->sent);
     }
 
-    public function testQueryWaitsUntilABusyChannelIsReleased(): void
+    public function testASecondQueryWaitsWhileTheOnlyChannelIsBusy(): void
+    {
+        self::assertSame(1, self::twoQueriesOnOneChannel()['sent while busy']);
+    }
+
+    public function testTheFirstQueryIsAnsweredWhenTheChannelAnswersIt(): void
+    {
+        self::assertSame(1, self::twoQueriesOnOneChannel()['first answer']);
+    }
+
+    public function testTheWaitingQueryIsSentOnceTheChannelIsReleased(): void
+    {
+        self::assertSame(2, self::twoQueriesOnOneChannel()['sent once released']);
+    }
+
+    public function testTheWaitingQueryIsAnsweredByTheReleasedChannel(): void
+    {
+        self::assertSame(2, self::twoQueriesOnOneChannel()['second answer']);
+    }
+
+    private static function countQuery(): CountByFiltersQuery
+    {
+        return new CountByFiltersQuery(new FilterCollection([]), ActingKeysMother::anonymous(), 100);
+    }
+
+    private static function surfaceTheDeadChannel(ReadWorkerPool $pool): void
+    {
+        try {
+            $pool->query(self::countQuery());
+        } catch (ChannelException) {
+            return;
+        }
+
+        throw new RuntimeException('expected the dead channel to surface its error');
+    }
+
+    private static function workerResultFailureOf(ReadWorkerPool $pool): string
+    {
+        try {
+            $pool->query(self::countQuery());
+        } catch (WorkerResultException $failure) {
+            return $failure->getMessage();
+        }
+
+        throw new RuntimeException('expected the worker failure to surface');
+    }
+
+    /**
+     * @return array{'in flight per channel': list<int>, answers: list<mixed>}
+     */
+    private static function twoConcurrentQueries(): array
+    {
+        $first = new ControllableChannel();
+        $second = new ControllableChannel();
+        $pool = new ReadWorkerPool([$first, $second]);
+
+        $a = async(static fn () => $pool->query(self::countQuery()));
+        delay(0);
+        $b = async(static fn () => $pool->query(self::countQuery()));
+        delay(0);
+        $inFlight = [count($first->sent), count($second->sent)];
+
+        $first->answer(1);
+        $second->answer(2);
+
+        return ['in flight per channel' => $inFlight, 'answers' => [$a->await(), $b->await()]];
+    }
+
+    /**
+     * @return array{'sent while busy': int, 'first answer': mixed, 'sent once released': int, 'second answer': mixed}
+     */
+    private static function twoQueriesOnOneChannel(): array
     {
         $channel = new ControllableChannel();
         $pool = new ReadWorkerPool([$channel]);
 
-        async(static function () use ($pool, $channel): void {
-            $first = async(static fn () => $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100)));
-            delay(0);
-            $second = async(static fn () => $pool->query(new CountByFiltersQuery(new FilterCollection([]), 100)));
-            delay(0);
+        $first = async(static fn () => $pool->query(self::countQuery()));
+        delay(0);
+        $second = async(static fn () => $pool->query(self::countQuery()));
+        delay(0);
+        $sentWhileBusy = count($channel->sent);
 
-            self::assertCount(1, $channel->sent);
+        $channel->answer(1);
+        $firstAnswer = $first->await();
+        delay(0);
+        $sentOnceReleased = count($channel->sent);
 
-            $channel->answer(1);
-            self::assertSame(1, $first->await());
-            delay(0);
+        $channel->answer(2);
 
-            self::assertCount(2, $channel->sent);
-
-            $channel->answer(2);
-            self::assertSame(2, $second->await());
-        })->await();
+        return ['sent while busy' => $sentWhileBusy, 'first answer' => $firstAnswer, 'sent once released' => $sentOnceReleased, 'second answer' => $second->await()];
     }
 }

@@ -20,6 +20,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Relay\Application\Port\RelayEventStoreInterface;
 use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
+use Innis\Nostr\Relay\Domain\ValueObject\ActingKeys;
 use Override;
 
 final readonly class WorkerEventStore implements RelayEventStoreInterface
@@ -38,21 +39,21 @@ final readonly class WorkerEventStore implements RelayEventStoreInterface
     }
 
     #[Override]
-    public function findByFilters(FilterCollection $filters): StoredEventCollection
+    public function findByFilters(FilterCollection $filters, ActingKeys $reader): StoredEventCollection
     {
-        return $this->readPool->queryForInstance(new FindByFiltersQuery($filters), StoredEventCollection::class);
+        return $this->readPool->queryForInstance(new FindByFiltersQuery($filters, $reader), StoredEventCollection::class);
     }
 
     #[Override]
-    public function countByFilters(FilterCollection $filters): EventCount
+    public function countByFilters(FilterCollection $filters, ActingKeys $reader): EventCount
     {
-        return $this->readPool->queryForInstance(new CountByFiltersQuery($filters, $this->countLimit), EventCount::class);
+        return $this->readPool->queryForInstance(new CountByFiltersQuery($filters, $reader, $this->countLimit), EventCount::class);
     }
 
     #[Override]
-    public function deleteByEventIds(EventIdCollection $eventIds, PublicKey $author): int
+    public function deleteByEventIds(EventIdCollection $eventIds, ActingKeys $deleter): int
     {
-        return $this->writeCoordinator->applyForInt(new DeleteEventIdsCommand($eventIds, $author));
+        return $this->writeCoordinator->applyForInt(new DeleteEventIdsCommand($eventIds, $deleter));
     }
 
     #[Override]

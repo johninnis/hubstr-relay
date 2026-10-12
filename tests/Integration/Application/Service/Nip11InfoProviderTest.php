@@ -90,22 +90,51 @@ final class Nip11InfoProviderTest extends TestCase
 
     public function testAdvertisesTheDirectMessageInboxWhileTheDefaultPolicyProvidesOne(): void
     {
-        $provider = new Nip11InfoProvider(self::createConfig()->getRelayInfo(), self::createPolicyState(), RelayLimits::defaults());
-
-        $this->assertSame([1, 9, 11, 17, 40, 42, 45, 50, 70, 86, 98], $provider->getNip11Info()->getSupportedNips());
+        $this->assertSame([1, 9, 11, 17, 40, 42, 45, 50, 59, 67, 70, 86, 98], self::supportedNipsUnder(GuestPolicy::defaults()));
     }
 
-    public function testStopsAdvertisingTheInboxOnceGiftWrapsBecomeGuestReadable(): void
+    public function testKeepsAdvertisingTheInboxWhenGiftWrapsBecomeGuestReadable(): void
+    {
+        $this->assertSame([1, 9, 11, 17, 40, 42, 45, 50, 59, 67, 70, 86, 98], self::supportedNipsUnder(self::policy([
+            'read' => ['kinds' => [EventKind::GIFT_WRAP], 'global_kinds' => [EventKind::GIFT_WRAP]],
+        ])));
+    }
+
+    public function testAdvertisesTheInboxWhileATagPrefixOnThePTagAdmitsWrapsToATenant(): void
+    {
+        $this->assertSame([1, 9, 11, 17, 40, 42, 45, 50, 59, 67, 70, 86, 98], self::supportedNipsUnder(self::policy([
+            'write' => ['tagged_to_tenant' => false, 'tag_prefixes' => [['tag' => 'p', 'prefixes' => ['aa'], 'kinds' => [EventKind::GIFT_WRAP]]]],
+        ])));
+    }
+
+    public function testStopsAdvertisingTheInboxOnceGiftWrapsAreNoLongerGuestWritable(): void
+    {
+        $this->assertSame([1, 9, 11, 40, 42, 45, 50, 59, 67, 70, 86, 98], self::supportedNipsUnder(self::policy([
+            'write' => ['kinds' => [EventKind::TEXT_NOTE]],
+        ])));
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private static function policy(array $data): GuestPolicy
+    {
+        return GuestPolicy::tryFromArray($data) ?? self::fail('the guest policy did not parse');
+    }
+
+    /**
+     * @return list<int>|null
+     */
+    private static function supportedNipsUnder(GuestPolicy $guestPolicy): ?array
     {
         $pdo = self::createDatabase();
+        $config = self::createConfig();
         $policyState = new PolicyState(new PolicyReadStore($pdo));
-        $provider = new Nip11InfoProvider(self::createConfig()->getRelayInfo(), $policyState, RelayLimits::defaults());
+        $policyManagement = self::createPolicyManagement($pdo, $policyState);
+        $policyManagement->addTenant($config->getAdminPubkey());
+        $policyManagement->setGuestPolicy($guestPolicy);
 
-        self::createPolicyManagement($pdo, $policyState)->setGuestPolicy(GuestPolicy::fromArray([
-            'read' => ['kinds' => [EventKind::GIFT_WRAP]],
-        ]));
-
-        $this->assertSame([1, 9, 11, 40, 42, 45, 50, 70, 86, 98], $provider->getNip11Info()->getSupportedNips());
+        return new Nip11InfoProvider($config->getRelayInfo(), $policyState, RelayLimits::defaults())->getNip11Info()->getSupportedNips();
     }
 
     private static function createConfig(): RelayConfig

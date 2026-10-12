@@ -24,6 +24,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Tag\Hashtag;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\TagType;
 use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
+use Innis\Nostr\Relay\Domain\ValueObject\ActingKeys;
 use Innis\Nostr\Relay\Domain\ValueObject\EncodedEvent;
 use Override;
 use PDO;
@@ -79,21 +80,40 @@ final readonly class EventWriteStore implements EventWriterInterface
         }
     }
 
-    public function deleteByEventIds(EventIdCollection $eventIds, PublicKey $author): int
+    // Deliberate: the deleter's own events and the gift wraps addressed to it, never a deletion, decided in the one statement that deletes — see nostr-relay ADR-0038 and ADR-0043
+    public function deleteByEventIds(EventIdCollection $eventIds, ActingKeys $deleter): int
     {
-        if ($eventIds->isEmpty()) {
+        $keys = $deleter->getKeys();
+
+        if ($eventIds->isEmpty() || $keys->isEmpty()) {
             return 0;
         }
 
-        $params = array_map(static fn (EventId $id) => $id->toBytes(), $eventIds->toArray());
-        $params[] = $author->toBytes();
+        $confinedKinds = $deleter->getConfinedKinds()->toInts();
+        $params = [
+            ...array_map(static fn (EventId $id): string => $id->toBytes(), $eventIds->toArray()),
+            EventKind::EVENT_DELETION,
+            ...array_map(static fn (PublicKey $key): string => $key->toBytes(), $keys->toArray()),
+            ...$confinedKinds,
+            TagType::PUBKEY,
+            json_encode($keys->toHexes(), JSON_THROW_ON_ERROR),
+        ];
 
         // Deliberate: prepared on the connection for this one call, never through the runner — a statement whose placeholder count varies would be cached once per distinct count for the life of the connection — see ADR-0020
-        $placeholders = implode(',', array_fill(0, $eventIds->count(), '?'));
-        $statement = $this->pdo->prepare("DELETE FROM events WHERE event_id IN ({$placeholders}) AND pubkey = ?");
+        $statement = $this->pdo->prepare(sprintf(
+            'DELETE FROM events WHERE event_id IN (%s) AND kind <> ? AND (pubkey IN (%s) OR (kind IN (%s) AND event_id IN (SELECT event_id FROM event_tags WHERE tag_name = ? AND tag_value IN (SELECT value FROM json_each(?)))))',
+            self::placeholders($eventIds->count()),
+            self::placeholders($keys->count()),
+            self::placeholders(count($confinedKinds)),
+        ));
         $statement->execute($params);
 
         return $statement->rowCount();
+    }
+
+    private static function placeholders(int $count): string
+    {
+        return implode(',', array_fill(0, $count, '?'));
     }
 
     public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author, Timestamp $until): int

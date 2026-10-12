@@ -7,12 +7,14 @@ namespace Innis\Hubstr\Relay\Infrastructure\Worker\Query;
 use Innis\Hubstr\Relay\Infrastructure\Worker\ReadContext;
 use Innis\Hubstr\Relay\Infrastructure\Worker\ReadQueryInterface;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
+use Innis\Nostr\Relay\Domain\ValueObject\ActingKeys;
 use Override;
 
 final readonly class CountByFiltersQuery implements ReadQueryInterface
 {
     public function __construct(
         private FilterCollection $filters,
+        private ActingKeys $reader,
         private int $limit,
     ) {
     }
@@ -20,6 +22,6 @@ final readonly class CountByFiltersQuery implements ReadQueryInterface
     #[Override]
     public function applyTo(ReadContext $context): mixed
     {
-        return $context->getEventQueryStore()->countByFilters($this->filters, $this->limit);
+        return $context->getEventQueryStore()->countByFilters($this->filters, $this->reader, $this->limit);
     }
 }

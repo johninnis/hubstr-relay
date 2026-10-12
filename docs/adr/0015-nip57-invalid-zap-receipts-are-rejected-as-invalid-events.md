@@ -29,3 +29,4 @@ The relay verifies only the receipt's internal consistency. It does not check th
 - Do not move the check below the tenant bypass to make the method read consistently. The ordering is the decision.
 - A guest can still publish a *consistent but untrue* receipt, because provider-signature verification is out of scope here. The zap statistics are therefore a measure of what was claimed, not of what was paid, and are shown only to tenants.
 - If nostr-relay later lets a host supply its own `EventValidatorInterface`, this check moves there and `allowEventSubmission` goes back to answering only policy questions.
+- Shared decision: nostr-adrs ADR-0038.

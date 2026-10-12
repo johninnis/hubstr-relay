@@ -13,6 +13,7 @@ use Innis\Hubstr\Relay\Infrastructure\Persistence\EventQueryStore;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\EventWriteStore;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WorkerFailure;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteContext;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\EventCollection;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
@@ -63,13 +64,9 @@ final class EventStorageTest extends TestCase
     private function findEvents(array $filters, int $limit = 100): array
     {
         return array_map(
-            static function (StoredEvent $stored): Event {
-                $event = Event::tryFromJson($stored->getEncoded()->toJson());
-                self::assertNotNull($event);
-
-                return $event;
-            },
-            $this->queryStore->findByFilters(new FilterCollection($filters))->toArray(),
+            static fn (StoredEvent $stored): Event => Event::tryFromJson($stored->getEncoded()->toJson())
+                ?? throw new RuntimeException(sprintf('Stored event %s did not parse', $stored->getHeader()->getId()->toHex())),
+            $this->queryStore->findByFilters(new FilterCollection($filters), ActingKeysMother::anonymous())->toArray(),
         );
     }
 
@@ -91,16 +88,17 @@ final class EventStorageTest extends TestCase
     public function testWhatIsStoredIsTheEventsOwnEncodingNotTheBytesItArrivedAs(): void
     {
         $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), "Hello Nostr!\u{2028}/");
-        $arrived = Event::tryFromJson(json_encode([...$event->toArray(), 'evil' => 'unsigned'], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
-        self::assertNotNull($arrived);
+        $arrived = Event::tryFromJson(json_encode([...$event->toArray(), 'evil' => 'unsigned'], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR))
+            ?? throw new RuntimeException('The event as it arrived did not parse');
         $this->writeStore->store($arrived);
 
-        $results = $this->queryStore->findByFilters(
-            new FilterCollection([Filter::tryFromArray(['ids' => [$event->getId()->toHex()]])]),
-        )->toArray();
-
-        $this->assertCount(1, $results);
-        $this->assertSame($event->toJson(), $results[0]->getEncoded()->toJson());
+        $this->assertSame(
+            [$event->toJson()],
+            array_map(
+                static fn (StoredEvent $stored): string => $stored->getEncoded()->toJson(),
+                $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['ids' => [$event->getId()->toHex()]])]), ActingKeysMother::anonymous())->toArray(),
+            ),
+        );
     }
 
     public function testInvalidHexFilterValuesAreRejectedAtTheBoundary(): void
@@ -299,16 +297,50 @@ final class EventStorageTest extends TestCase
         $this->assertSame($second->getId()->toHex(), $results[0]->getId()->toHex());
     }
 
-    public function testReplaceableKind10000Range(): void
+    public function testAReplaceableEventInTheKind10000RangeIsStored(): void
     {
-        $older = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::MUTE_LIST), '', time() - 100);
-        $newer = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::MUTE_LIST), '', time());
+        $this->assertSame(EventStoreOutcome::Stored, $this->writeStore->store($this->muteListAt(time() - 100)));
+    }
 
-        $this->assertSame(EventStoreOutcome::Stored, $this->writeStore->store($older));
-        $this->assertSame(EventStoreOutcome::Stored, $this->writeStore->store($newer));
+    public function testANewerReplaceableEventInTheKind10000RangeIsStored(): void
+    {
+        $this->writeStore->store($this->muteListAt(time() - 100));
+
+        $this->assertSame(EventStoreOutcome::Stored, $this->writeStore->store($this->muteListAt(time())));
+    }
+
+    public function testTheKind10000RangeKeepsOneVersionPerAuthor(): void
+    {
+        $this->writeStore->store($this->muteListAt(time() - 100));
+        $this->writeStore->store($this->muteListAt(time()));
 
         $this->assertSame(1, $this->queryStore->countByFilters(
-            new FilterCollection([Filter::tryFromArray(['authors' => [$this->keyPair->getPublicKey()->toHex()], 'kinds' => [10000]])]), self::COUNT_LIMIT)->toInt());
+            new FilterCollection([Filter::tryFromArray(['authors' => [$this->keyPair->getPublicKey()->toHex()], 'kinds' => [10000]])]), ActingKeysMother::anonymous(), self::COUNT_LIMIT)->toInt());
+    }
+
+    private function storedNote(string $content): Event
+    {
+        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), $content);
+        $this->writeStore->store($event);
+
+        return $event;
+    }
+
+    private function storeNotes(string ...$contents): void
+    {
+        foreach ($contents as $content) {
+            $this->storedNote($content);
+        }
+    }
+
+    private function noteCount(): int
+    {
+        return $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous(), self::COUNT_LIMIT)->toInt();
+    }
+
+    private function muteListAt(int $createdAt): Event
+    {
+        return SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::MUTE_LIST), '', $createdAt);
     }
 
     public function testParameterisedReplaceableEvent(): void
@@ -556,25 +588,37 @@ final class EventStorageTest extends TestCase
         }
         $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::REACTION), '+'));
 
-        $this->assertSame(5, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), self::COUNT_LIMIT)->toInt());
+        $this->assertSame(5, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous(), self::COUNT_LIMIT)->toInt());
     }
 
-    public function testDeleteByContentMatchSingleWord(): void
+    public function testDeleteByContentMatchOfASingleWordReportsTheEventItRemoved(): void
     {
-        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'this is spam content'));
-        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'clean note'));
+        $this->storeNotes('this is spam content', 'clean note');
 
         $this->assertSame(1, $this->writeStore->deleteByContentMatchChunk(BlacklistWord::fromString('spam'), 100));
-        $this->assertSame(1, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), self::COUNT_LIMIT)->toInt());
     }
 
-    public function testDeleteByContentMatchRemovesTheWordsAsWritten(): void
+    public function testDeleteByContentMatchOfASingleWordLeavesAnEventWithoutIt(): void
     {
-        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'a spam scam offer'));
-        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'only spam here'));
+        $this->storeNotes('this is spam content', 'clean note');
+        $this->writeStore->deleteByContentMatchChunk(BlacklistWord::fromString('spam'), 100);
+
+        $this->assertSame(1, $this->noteCount());
+    }
+
+    public function testDeleteByContentMatchOfAPhraseReportsTheEventThatSaysItAsWritten(): void
+    {
+        $this->storeNotes('a spam scam offer', 'only spam here');
 
         $this->assertSame(1, $this->writeStore->deleteByContentMatchChunk(BlacklistWord::fromString('spam scam'), 100));
-        $this->assertSame(1, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), self::COUNT_LIMIT)->toInt());
+    }
+
+    public function testDeleteByContentMatchOfAPhraseLeavesAnEventThatSaysOnlyPartOfIt(): void
+    {
+        $this->storeNotes('a spam scam offer', 'only spam here');
+        $this->writeStore->deleteByContentMatchChunk(BlacklistWord::fromString('spam scam'), 100);
+
+        $this->assertSame(1, $this->noteCount());
     }
 
     public function testDeleteByContentMatchSparesEventsThatMerelyUseBothWordsApart(): void
@@ -620,31 +664,49 @@ final class EventStorageTest extends TestCase
         $this->assertSame(1, $this->writeStore->deleteByContentMatchChunk(BlacklistWord::fromString('spam'), 100));
     }
 
-    public function testAWordTooShortToBanCannotReachTheDelete(): void
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function wordsTooShortToBan(): iterable
     {
-        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'keep me'));
-
-        $this->assertNull(BlacklistWord::tryFromString('   '));
-        $this->assertNull(BlacklistWord::tryFromString(' '));
-        $this->assertNull(BlacklistWord::tryFromString('e'));
-        $this->assertSame(1, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), self::COUNT_LIMIT)->toInt());
+        yield 'three spaces' => ['   '];
+        yield 'one space' => [' '];
+        yield 'one letter' => ['e'];
     }
 
-    public function testDeleteByEventIds(): void
+    #[DataProvider('wordsTooShortToBan')]
+    public function testAWordTooShortToBanCannotReachTheDelete(string $word): void
     {
-        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'to delete');
-        $this->writeStore->store($event);
+        $this->assertNull(BlacklistWord::tryFromString($word));
+    }
 
-        $this->assertSame(1, $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), $this->keyPair->getPublicKey()));
+    public function testDeleteByEventIdsReportsTheAuthorsEventItRemoved(): void
+    {
+        $event = $this->storedNote('to delete');
+
+        $this->assertSame(1, $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), ActingKeysMother::of($this->keyPair->getPublicKey())));
+    }
+
+    public function testDeleteByEventIdsRemovesTheAuthorsEvent(): void
+    {
+        $event = $this->storedNote('to delete');
+        $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), ActingKeysMother::of($this->keyPair->getPublicKey()));
+
         $this->assertCount(0, $this->findEvents([Filter::tryFromArray(['ids' => [$event->getId()->toHex()]])]));
     }
 
-    public function testDeleteByEventIdsWrongAuthorDoesNothing(): void
+    public function testDeleteByEventIdsOfAnotherKeyReportsNothingRemoved(): void
     {
-        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'keep this');
-        $this->writeStore->store($event);
+        $event = $this->storedNote('keep this');
 
-        $this->assertSame(0, $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), KeyPair::generate(SignedEventFactory::signer())->getPublicKey()));
+        $this->assertSame(0, $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), ActingKeysMother::of(KeyPair::generate(SignedEventFactory::signer())->getPublicKey())));
+    }
+
+    public function testDeleteByEventIdsOfAnotherKeyLeavesTheEvent(): void
+    {
+        $event = $this->storedNote('keep this');
+        $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), ActingKeysMother::of(KeyPair::generate(SignedEventFactory::signer())->getPublicKey()));
+
         $this->assertCount(1, $this->findEvents([Filter::tryFromArray(['ids' => [$event->getId()->toHex()]])]));
     }
 
@@ -832,13 +894,19 @@ final class EventStorageTest extends TestCase
         $this->assertSame(0, $this->writeStore->deleteByContentMatchChunk(BlacklistWord::fromString('spam'), 2));
     }
 
-    public function testDeleteByPubkeyChunkRemovesAuthorEvents(): void
+    public function testDeleteByPubkeyChunkReportsTheAuthorsEventsItRemoved(): void
     {
-        $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'spam');
-        $this->writeStore->store($event);
+        $this->storeNotes('spam');
 
-        $this->assertSame(1, $this->writeStore->deleteByPubkeyChunk($event->getPubkey(), 100));
-        $this->assertSame(0, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), self::COUNT_LIMIT)->toInt());
+        $this->assertSame(1, $this->writeStore->deleteByPubkeyChunk($this->keyPair->getPublicKey(), 100));
+    }
+
+    public function testDeleteByPubkeyChunkRemovesTheAuthorsEvents(): void
+    {
+        $this->storeNotes('spam');
+        $this->writeStore->deleteByPubkeyChunk($this->keyPair->getPublicKey(), 100);
+
+        $this->assertSame(0, $this->noteCount());
     }
 
     public function testDeleteByPubkeyChunkHonoursLimit(): void
@@ -1004,14 +1072,25 @@ final class EventStorageTest extends TestCase
         return $stmt instanceof PDOStatement ? array_values(array_map(strval(...), $stmt->fetchAll(PDO::FETCH_COLUMN))) : [];
     }
 
-    public function testDeleteByHashtagChunkRemovesTaggedEvents(): void
+    public function testDeleteByHashtagChunkReportsTheTaggedEventsItRemoved(): void
     {
-        $tagged = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'tagged', new TagCollection([Tag::hashtag(Hashtag::fromString('spam'))]));
-        $this->writeStore->store($tagged);
-        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'untagged'));
+        $this->storeTaggedAndUntaggedNotes();
 
         $this->assertSame(1, $this->writeStore->deleteByHashtagChunk(Hashtag::fromString('spam'), 100));
-        $this->assertSame(1, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), self::COUNT_LIMIT)->toInt());
+    }
+
+    public function testDeleteByHashtagChunkLeavesAnUntaggedEvent(): void
+    {
+        $this->storeTaggedAndUntaggedNotes();
+        $this->writeStore->deleteByHashtagChunk(Hashtag::fromString('spam'), 100);
+
+        $this->assertSame(1, $this->noteCount());
+    }
+
+    private function storeTaggedAndUntaggedNotes(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'tagged', new TagCollection([Tag::hashtag(Hashtag::fromString('spam'))])));
+        $this->storeNotes('untagged');
     }
 
     public function testMultipleFiltersUnionResults(): void
@@ -1040,7 +1119,7 @@ final class EventStorageTest extends TestCase
     {
         $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'tagged', new TagCollection([Tag::hashtag(Hashtag::fromString('test'))]));
         $this->writeStore->store($event);
-        $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), $this->keyPair->getPublicKey());
+        $this->writeStore->deleteByEventIds(new EventIdCollection([$event->getId()]), ActingKeysMother::of($this->keyPair->getPublicKey()));
 
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM event_tags');
         $stmt->execute();
@@ -1067,11 +1146,12 @@ final class EventStorageTest extends TestCase
         $deletion = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::EVENT_DELETION), 'removing', $deletionTags);
         $this->writeStore->store($deletion);
 
-        $this->writeStore->deleteByEventIds(new EventIdCollection([$target->getId()]), $this->keyPair->getPublicKey());
+        $this->writeStore->deleteByEventIds(new EventIdCollection([$target->getId()]), ActingKeysMother::of($this->keyPair->getPublicKey()));
 
-        $results = $this->findEvents([Filter::tryFromArray(['kinds' => [5]])]);
-        $this->assertCount(1, $results);
-        $this->assertSame($deletion->getId()->toHex(), $results[0]->getId()->toHex());
+        $this->assertSame(
+            [$deletion->getId()->toHex()],
+            array_map(static fn (Event $event): string => $event->getId()->toHex(), $this->findEvents([Filter::tryFromArray(['kinds' => [5]])])),
+        );
     }
 
     public function testStoredEventPreservesSignature(): void

@@ -9,9 +9,11 @@ use Innis\Hubstr\Core\Infrastructure\Persistence\SqliteDatabase;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\EventQueryStore;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\EventWriteStore;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteContext;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
 use Innis\Nostr\Core\Domain\Collection\TagCollection;
+use Innis\Nostr\Core\Domain\Entity\Event;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\KeyPair;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
@@ -52,40 +54,40 @@ final class EventQueryStoreTest extends TestCase
     {
         $author = $this->keyPair->getPublicKey()->toHex();
 
-        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['authors' => [$author]])]));
+        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['authors' => [$author]])]), ActingKeysMother::anonymous());
 
         $this->assertCount(1, $events);
     }
 
     public function testEmptyAuthorsMatchesNothing(): void
     {
-        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['authors' => []])]));
+        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['authors' => []])]), ActingKeysMother::anonymous());
 
         $this->assertCount(0, $events);
     }
 
     public function testEmptyKindsMatchesNothing(): void
     {
-        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => []])]));
+        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => []])]), ActingKeysMother::anonymous());
 
         $this->assertCount(0, $events);
     }
 
     public function testEmptyIdsMatchesNothing(): void
     {
-        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['ids' => []])]));
+        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['ids' => []])]), ActingKeysMother::anonymous());
 
         $this->assertCount(0, $events);
     }
 
     public function testCountWithEmptyAuthorsIsZero(): void
     {
-        $this->assertSame(0, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['authors' => []])]), self::COUNT_LIMIT)->toInt());
+        $this->assertSame(0, $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['authors' => []])]), ActingKeysMother::anonymous(), self::COUNT_LIMIT)->toInt());
     }
 
     public function testACountBelowTheCeilingIsExact(): void
     {
-        $count = $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), 10);
+        $count = $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous(), 10);
 
         $this->assertEquals(EventCount::exact(1), $count);
     }
@@ -95,7 +97,7 @@ final class EventQueryStoreTest extends TestCase
         $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'two'));
         $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'three'));
 
-        $count = $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), 2);
+        $count = $this->queryStore->countByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous(), 2);
 
         $this->assertEquals(EventCount::approximate(2), $count);
     }
@@ -108,7 +110,7 @@ final class EventQueryStoreTest extends TestCase
         $count = $this->queryStore->countByFilters(new FilterCollection([
             Filter::tryFromArray(['kinds' => [1]]),
             Filter::tryFromArray(['kinds' => [7]]),
-        ]), 2);
+        ]), ActingKeysMother::anonymous(), 2);
 
         $this->assertEquals(EventCount::approximate(2), $count);
     }
@@ -118,7 +120,7 @@ final class EventQueryStoreTest extends TestCase
         $count = $this->queryStore->countByFilters(new FilterCollection([
             Filter::tryFromArray(['kinds' => [1]]),
             Filter::tryFromArray(['authors' => [$this->keyPair->getPublicKey()->toHex()]]),
-        ]), self::COUNT_LIMIT);
+        ]), ActingKeysMother::anonymous(), self::COUNT_LIMIT);
 
         $this->assertEquals(EventCount::exact(1), $count);
     }
@@ -133,8 +135,8 @@ final class EventQueryStoreTest extends TestCase
         ]);
 
         $this->assertSame(
-            count($this->queryStore->findByFilters($filters)),
-            $this->queryStore->countByFilters($filters, self::COUNT_LIMIT)->toInt(),
+            count($this->queryStore->findByFilters($filters, ActingKeysMother::anonymous())),
+            $this->queryStore->countByFilters($filters, ActingKeysMother::anonymous(), self::COUNT_LIMIT)->toInt(),
         );
     }
 
@@ -150,12 +152,47 @@ final class EventQueryStoreTest extends TestCase
         $events = $this->queryStore->findByFilters(new FilterCollection([
             Filter::tryFromArray(['kinds' => [1], 'until' => 1000]),
             Filter::tryFromArray(['kinds' => [2], 'until' => 1000]),
-        ]));
+        ]), ActingKeysMother::anonymous());
 
         self::assertSame([$newest->toJson(), $middle->toJson(), $oldest->toJson()], self::encodings($events));
     }
 
-    public function testOverlappingFiltersDeduplicateAndHonourTheGlobalLimit(): void
+    public function testAFilterCutToItsLimitKeepsTheLowestIdOfEventsCreatedAtOnce(): void
+    {
+        $tied = array_map(
+            fn (string $content): Event => SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), $content, 500),
+            ['first', 'second', 'third', 'fourth'],
+        );
+        foreach ($tied as $event) {
+            $this->writeStore->store($event);
+        }
+        $lowestId = min(array_map(static fn (Event $event): string => $event->getId()->toHex(), $tied));
+
+        $events = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray(['kinds' => [1], 'since' => 500, 'until' => 500, 'limit' => 1])]), ActingKeysMother::anonymous());
+
+        self::assertSame([$lowestId], array_map(static fn (StoredEvent $event): string => $event->getHeader()->getId()->toHex(), $events->toArray()));
+    }
+
+    public function testFiltersMergeNewestFirstAndTheLowestIdFirstAmongEventsCreatedAtOnce(): void
+    {
+        $newest = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'newest', 600);
+        $tiedNote = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'tied', 500);
+        $tiedReaction = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::REACTION), 'tied', 500);
+        $oldest = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::REACTION), 'oldest', 400);
+        foreach ([$newest, $tiedNote, $tiedReaction, $oldest] as $event) {
+            $this->writeStore->store($event);
+        }
+        [$lowerId, $higherId] = strcmp($tiedNote->getId()->toHex(), $tiedReaction->getId()->toHex()) < 0 ? [$tiedNote, $tiedReaction] : [$tiedReaction, $tiedNote];
+
+        $events = $this->queryStore->findByFilters(new FilterCollection([
+            Filter::tryFromArray(['kinds' => [$higherId->getKind()->toInt()], 'until' => 1000]),
+            Filter::tryFromArray(['kinds' => [$lowerId->getKind()->toInt()], 'until' => 1000]),
+        ]), ActingKeysMother::anonymous());
+
+        self::assertSame([$newest->toJson(), $lowerId->toJson(), $higherId->toJson(), $oldest->toJson()], self::encodings($events));
+    }
+
+    public function testOverlappingFiltersReturnEachEventOnceNewestFirst(): void
     {
         $first = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'first', 100);
         $second = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'second', 200);
@@ -166,7 +203,7 @@ final class EventQueryStoreTest extends TestCase
         $events = $this->queryStore->findByFilters(new FilterCollection([
             Filter::tryFromArray(['kinds' => [1], 'until' => 1000]),
             Filter::tryFromArray(['authors' => [$author], 'until' => 1000]),
-        ]));
+        ]), ActingKeysMother::anonymous());
 
         self::assertSame([$second->toJson(), $first->toJson()], self::encodings($events));
     }
@@ -225,7 +262,7 @@ final class EventQueryStoreTest extends TestCase
      */
     private function onlyStored(array $filter): StoredEvent
     {
-        $stored = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray($filter)]))->toArray();
+        $stored = $this->queryStore->findByFilters(new FilterCollection([Filter::tryFromArray($filter)]), ActingKeysMother::anonymous())->toArray();
 
         self::assertCount(1, $stored);
 

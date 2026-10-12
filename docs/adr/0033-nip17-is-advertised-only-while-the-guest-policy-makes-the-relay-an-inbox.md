@@ -2,13 +2,13 @@
 
 ## Status
 
-Accepted
+Superseded by ADR-0042
 
 ## Context
 
 NIP-17 describes how a relay serves as a direct-message inbox: it accepts kind 1059 gift wraps addressed to its users, serves them only to the recipient behind AUTH, and advertises 17 in its relay-information document so a sender's client, reading the recipient's kind 10050 list, can tell which relays will take the message.
 
-This relay does the first two by design. The default guest write policy admits kind 1059 when it `p`-tags a tenant, and the default guest read policy keeps 1059 out of the readable kinds, so a guest can deliver a wrap and never read one ([ADR-0017](0017-gift-wraps-are-excluded-from-the-guest-readable-kinds.md)). The recipient tenant reads its mailbox at full scope over NIP-42.
+This relay does the first two by design. The default guest write policy admits kind 1059 when it `p`-tags a tenant, and the default guest read policy keeps 1059 out of the readable kinds, so a guest can deliver a wrap and never read one ([ADR-0036](0036-both-gift-wrap-kinds-are-guest-writable-and-excluded-from-the-guest-readable-kinds.md)). The recipient tenant reads its mailbox at full scope over NIP-42.
 
 What makes advertising it awkward is that every part of that behaviour is runtime configuration. `setguestpolicy` can remove 1059 from the writable kinds, turn off `tagged_to_tenant`, or add 1059 to the readable or global kinds, and after any of those the relay is no longer an inbox in NIP-17's sense. The `supported_nips` list, though, is assembled once from the config file. A static 17 would be true on the day the relay started and a lie the moment an operator changed the policy, and a lie in that field sends direct messages to a relay that will expose or refuse them.
 

@@ -15,6 +15,7 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\WorkerFailure;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteWorkerTask;
 use Innis\Hubstr\Relay\Tests\Fake\QueueChannel;
 use Innis\Hubstr\Relay\Tests\Fake\ThrowingWriteCommand;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\EventCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
@@ -77,7 +78,7 @@ final class WriteWorkerTaskTest extends TestCase
         $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'deletable');
         $channel = new QueueChannel([
             new StoreEventsCommand(new EventCollection([$event])),
-            new DeleteEventIdsCommand(new EventIdCollection([$event->getId()]), $event->getPubkey()),
+            new DeleteEventIdsCommand(new EventIdCollection([$event->getId()]), ActingKeysMother::of($event->getPubkey())),
         ]);
 
         new WriteWorkerTask($this->database)->run($channel, new NullCancellation());

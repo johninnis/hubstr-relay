@@ -43,7 +43,7 @@ final readonly class Nip11InfoProvider implements Nip11InfoProviderInterface
     {
         $nips = $this->base->getSupportedNips() ?? [];
 
-        if ($this->policyState->getGuestPolicy()->servesAsDirectMessageInbox()) {
+        if ($this->policyState->getGuestPolicy()->servesAsDirectMessageInbox($this->policyState->getTenantPubkeys())) {
             $nips[] = self::DIRECT_MESSAGE_INBOX_NIP;
         }
 

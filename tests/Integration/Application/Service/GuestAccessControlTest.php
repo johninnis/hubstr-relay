@@ -21,6 +21,7 @@ use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
+use Innis\Nostr\Core\Domain\Collection\TagCollection;
 use Innis\Nostr\Core\Domain\Entity\Event;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\KeyPair;
@@ -29,6 +30,7 @@ use Innis\Nostr\Core\Domain\ValueObject\Protocol\EventCount;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Message\RelayMessage;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\SubscriptionId;
+use Innis\Nostr\Core\Domain\ValueObject\Tag\Tag;
 use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
 use Innis\Nostr\Core\Infrastructure\Crypto\NativeRandomBytesGenerator;
 use Innis\Nostr\Core\Infrastructure\Time\SystemClock;
@@ -37,10 +39,13 @@ use Innis\Nostr\Relay\Application\Port\RateLimiterInterface;
 use Innis\Nostr\Relay\Application\Port\RelayEventStoreInterface;
 use Innis\Nostr\Relay\Application\Service\AuthChallengeIssuer;
 use Innis\Nostr\Relay\Application\Service\ClientMessenger;
+use Innis\Nostr\Relay\Application\Service\DeliveryGate;
+use Innis\Nostr\Relay\Application\Service\HeldSubscriptionSender;
 use Innis\Nostr\Relay\Application\Service\InMemoryAuthenticationRegistry;
 use Innis\Nostr\Relay\Application\Service\InMemoryClientRegistry;
 use Innis\Nostr\Relay\Application\Service\InMemorySubscriptionRegistry;
 use Innis\Nostr\Relay\Application\Service\RateLimitGate;
+use Innis\Nostr\Relay\Application\Service\ReadScopeGate;
 use Innis\Nostr\Relay\Application\Service\RegisteringStoredEventStreamer;
 use Innis\Nostr\Relay\Application\Service\StoredEventReadGate;
 use Innis\Nostr\Relay\Application\Service\StoredEventStreamer;
@@ -50,6 +55,7 @@ use Innis\Nostr\Relay\Application\Service\SubscriptionAnswers;
 use Innis\Nostr\Relay\Application\UseCase\CreateSubscriptionUseCase;
 use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
+use Innis\Nostr\Relay\Domain\ValueObject\ActingKeys;
 use Innis\Nostr\Relay\Domain\ValueObject\ConnectionInfo;
 use Innis\Nostr\Relay\Domain\ValueObject\IpAddress;
 use Innis\Nostr\Relay\Infrastructure\Concurrency\AmphpDeferredExecutor;
@@ -65,6 +71,7 @@ final class GuestAccessControlTest extends TestCase
     private PDO $pdo;
     private KeyPair $tenant;
     private KeyPair $stranger;
+    private KeyPair $otherTenant;
     private HubstrPolicy $policy;
     private InMemoryAuthenticationRegistry $authManager;
     private RelayEventStoreInterface $eventStore;
@@ -85,6 +92,8 @@ final class GuestAccessControlTest extends TestCase
         $policyState = new PolicyState(new PolicyReadStore($this->pdo));
         $policyManagement = new WriteThroughPolicyManagement($policyState, $writeCoordinator);
         $policyManagement->addTenant($this->tenant->getPublicKey());
+        $this->otherTenant = KeyPair::generate(SignedEventFactory::signer());
+        $policyManagement->addTenant($this->otherTenant->getPublicKey());
 
         $writeStore = WriteContext::forConnection($this->pdo)->getEventWriteStore();
         $writeStore->store(SignedEventFactory::signedEvent($this->tenant, EventKind::fromInt(EventKind::TEXT_NOTE), 'tenant note'));
@@ -94,6 +103,8 @@ final class GuestAccessControlTest extends TestCase
         $writeStore->store($strangerNote);
         $writeStore->store(SignedEventFactory::signedEvent($this->stranger, EventKind::fromInt(EventKind::ENCRYPTED_DIRECT_MESSAGE), 'stranger dm'));
         $this->strangerEventId = $strangerNote->getId()->toHex();
+        $writeStore->store($this->giftWrapFor($this->tenant->getPublicKey()));
+        $writeStore->store($this->giftWrapFor($this->otherTenant->getPublicKey()));
 
         $this->authManager = new InMemoryAuthenticationRegistry(new NativeRandomBytesGenerator());
         $this->policy = new HubstrPolicy($policyState, $this->authManager, RelayLimits::defaults());
@@ -106,21 +117,21 @@ final class GuestAccessControlTest extends TestCase
         $rateLimiter->method('tryConsume')->willReturn(true);
 
         $admission = new SubscriptionAdmission(
-            $this->policy,
             new RateLimitGate($rateLimiter, $this->policy),
+            new ReadScopeGate($this->policy, $this->authManager),
             $this->subscriptionManager,
         );
+        $subscriptionAnswers = new SubscriptionAnswers($this->subscriptionManager, new AuthChallengeIssuer($this->authManager), new NullLogger());
 
         $storedEventStreamer = new StoredEventStreamer(
-            new StoredEventReadGate($this->eventStore, $this->policy, new SystemClock()),
-            $clientMessenger,
-            new NullLogger(),
+            new StoredEventReadGate($this->eventStore, new DeliveryGate($this->policy), new SystemClock()),
+            new HeldSubscriptionSender($clientMessenger, $this->subscriptionManager, $subscriptionAnswers),
         );
 
         $activator = new SubscriptionActivator(
             $admission,
             new RegisteringStoredEventStreamer(new AmphpDeferredExecutor(), $storedEventStreamer, $this->subscriptionManager),
-            new SubscriptionAnswers($this->subscriptionManager, new AuthChallengeIssuer($this->authManager)),
+            $subscriptionAnswers,
         );
 
         $this->useCase = new CreateSubscriptionUseCase($activator);
@@ -195,13 +206,16 @@ final class GuestAccessControlTest extends TestCase
         self::assertSame([], $delivered);
     }
 
-    public function testTenantSeesEverythingIncludingStrangerEvents(): void
+    public function testTenantSeesStrangerEvents(): void
     {
         $delivered = $this->deliveredEvents([[]], authenticateTenant: true);
 
-        $authors = array_map(static fn (Event $event) => $event->getPubkey()->toHex(), $delivered);
-        self::assertContains($this->stranger->getPublicKey()->toHex(), $authors);
-        self::assertCount(5, $delivered);
+        self::assertContains($this->stranger->getPublicKey()->toHex(), array_map(static fn (Event $event) => $event->getPubkey()->toHex(), $delivered));
+    }
+
+    public function testTenantSeesEveryStoredEventItMayRead(): void
+    {
+        self::assertCount(6, $this->deliveredEvents([[]], authenticateTenant: true));
     }
 
     public function testTenantCanFetchStrangerEventById(): void
@@ -210,6 +224,43 @@ final class GuestAccessControlTest extends TestCase
 
         self::assertCount(1, $delivered);
         self::assertSame($this->strangerEventId, $delivered[0]->getId()->toHex());
+    }
+
+    public function testATenantCannotReadAnotherTenantsGiftWraps(): void
+    {
+        $delivered = $this->deliveredEvents([['kinds' => [EventKind::GIFT_WRAP]]], authenticateTenant: true);
+
+        self::assertSame([], $this->addressedTo($delivered, $this->otherTenant->getPublicKey()));
+    }
+
+    public function testATenantReadsTheGiftWrapsAddressedToIt(): void
+    {
+        $delivered = $this->deliveredEvents([['kinds' => [EventKind::GIFT_WRAP]]], authenticateTenant: true);
+
+        self::assertCount(1, $this->addressedTo($delivered, $this->tenant->getPublicKey()));
+    }
+
+    public function testATenantsFilterNamingNoKindReadsItsOwnGiftWrap(): void
+    {
+        $delivered = $this->deliveredEvents([[]], authenticateTenant: true);
+
+        self::assertCount(1, $this->addressedTo($delivered, $this->tenant->getPublicKey()));
+    }
+
+    public function testATenantsFilterNamingNoKindReadsNoOtherTenantsGiftWrap(): void
+    {
+        $delivered = $this->deliveredEvents([[]], authenticateTenant: true);
+
+        self::assertSame([], $this->addressedTo($delivered, $this->otherTenant->getPublicKey()));
+    }
+
+    public function testATenantAskingOnlyForAnotherTenantsGiftWrapsIsRefusedAsAuthRequired(): void
+    {
+        $filters = new FilterCollection([Filter::tryFromArray(['kinds' => [EventKind::GIFT_WRAP], '#p' => [$this->otherTenant->getPublicKey()->toHex()]]) ?? self::fail('filter did not parse')]);
+
+        $messages = $this->sentMessages($filters, authenticateTenant: true);
+
+        self::assertStringStartsWith('["CLOSED","sub-1","auth-required:', $messages[count($messages) - 1] ?? '');
     }
 
     public function testAReqBindingMoreValuesThanSqliteAllowsIsClosedBeforeItReachesTheStore(): void
@@ -269,6 +320,29 @@ final class GuestAccessControlTest extends TestCase
         return [...array_map(static fn (RelayMessage $reply): string => $reply->toJson(), $replies), ...$connection->messages];
     }
 
+    private function giftWrapFor(PublicKey $recipient): Event
+    {
+        return SignedEventFactory::signedEvent(
+            KeyPair::generate(SignedEventFactory::signer()),
+            EventKind::fromInt(EventKind::GIFT_WRAP),
+            'sealed',
+            new TagCollection([Tag::pubkey($recipient)]),
+        );
+    }
+
+    /**
+     * @param list<Event> $events
+     *
+     * @return list<Event>
+     */
+    private function addressedTo(array $events, PublicKey $recipient): array
+    {
+        return array_values(array_filter(
+            $events,
+            static fn (Event $event): bool => $event->getKind()->is(EventKind::GIFT_WRAP) && $event->getTags()->getPubkeys()->contains($recipient),
+        ));
+    }
+
     /**
      * @param array<string, mixed> $rawFilter
      */
@@ -293,17 +367,17 @@ final class GuestAccessControlTest extends TestCase
                 return EventStoreOutcome::Stored;
             }
 
-            public function findByFilters(FilterCollection $filters): StoredEventCollection
+            public function findByFilters(FilterCollection $filters, ActingKeys $reader): StoredEventCollection
             {
-                return $this->queryStore->findByFilters($filters);
+                return $this->queryStore->findByFilters($filters, $reader);
             }
 
-            public function countByFilters(FilterCollection $filters): EventCount
+            public function countByFilters(FilterCollection $filters, ActingKeys $reader): EventCount
             {
-                return $this->queryStore->countByFilters($filters, 1000);
+                return $this->queryStore->countByFilters($filters, $reader, 1000);
             }
 
-            public function deleteByEventIds(EventIdCollection $eventIds, PublicKey $author): int
+            public function deleteByEventIds(EventIdCollection $eventIds, ActingKeys $deleter): int
             {
                 return 0;
             }

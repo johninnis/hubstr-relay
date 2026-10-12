@@ -25,17 +25,36 @@ final class RelayConfigTest extends TestCase
         $this->assertSame(LogLevel::Info, $config->getRuntime()->getLogLevel());
     }
 
-    public function testRelayInfoFromConfig(): void
+    public function testTheRelayInfoNamesTheConfiguredRelay(): void
     {
-        $config = RelayConfig::fromValues(ConfigValues::fromArray($this->validConfig()));
-        $info = $config->getRelayInfo();
+        $this->assertSame('Test Relay', $this->config()->getRelayInfo()->getName());
+    }
 
-        $this->assertSame('Test Relay', $info->getName());
-        $this->assertSame('A test relay', $info->getDescription());
-        $this->assertSame([1, 9, 11, 40, 42, 45, 50, 70, 86, 98], $info->getSupportedNips());
-        $this->assertSame('https://www.hubstr.xyz/relay/', $info->getSoftware());
-        $this->assertSame('wss://relay.example.com', (string) $config->getRelayUrl());
-        $this->assertSame((string) $config->getRelayUrl(), (string) $info->getRelayUrl());
+    public function testTheRelayInfoCarriesTheConfiguredDescription(): void
+    {
+        $this->assertSame('A test relay', $this->config()->getRelayInfo()->getDescription());
+    }
+
+    public function testTheRelayInfoListsTheNipsTheRelaySupports(): void
+    {
+        $this->assertSame([1, 9, 11, 40, 42, 45, 50, 59, 67, 70, 86, 98], $this->config()->getRelayInfo()->getSupportedNips());
+    }
+
+    public function testTheRelayInfoNamesTheSoftware(): void
+    {
+        $this->assertSame('https://www.hubstr.xyz/relay/', $this->config()->getRelayInfo()->getSoftware());
+    }
+
+    public function testTheRelayUrlIsTheConfiguredOne(): void
+    {
+        $this->assertSame('wss://relay.example.com', (string) $this->config()->getRelayUrl());
+    }
+
+    public function testTheRelayInfoCarriesTheRelayUrl(): void
+    {
+        $config = $this->config();
+
+        $this->assertSame((string) $config->getRelayUrl(), (string) $config->getRelayInfo()->getRelayUrl());
     }
 
     public function testMaxConnectionsFallsBackToDefaultWhenAbsent(): void
@@ -197,6 +216,11 @@ final class RelayConfigTest extends TestCase
         $this->expectExceptionMessage('relay_url');
 
         RelayConfig::fromValues(ConfigValues::fromArray($data));
+    }
+
+    private function config(): RelayConfig
+    {
+        return RelayConfig::fromValues(ConfigValues::fromArray($this->validConfig()));
     }
 
     /**

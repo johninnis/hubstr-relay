@@ -11,7 +11,7 @@ Your browser-based Nostr client connects to other relays and forwards every even
 It then serves events with two access tiers:
 
 - **Anyone** can read your public events (notes, profile, reposts, reactions, long-form articles). They can also send you reactions, zaps, replies, and DMs.
-- **You** (authenticated via NIP-42) get full access to the entire cache — every event your client has ever seen.
+- **You** (authenticated via NIP-42) get full access to the entire cache — every event your client has ever seen, save gift wraps addressed to another key, which the relay serves only to the key they name.
 
 This means your relay is your public Nostr presence *and* your private event archive.
 
@@ -67,32 +67,34 @@ Global read kinds default to `[24133]` (NIP-46 Nostr Connect), so a remote signe
 
 ### Admitting guest writes by tag value
 
-A third write clause, `tag_prefixes`, admits a guest event when it carries one of a configured set of tags with a value starting with one of that tag's prefixes. It is off by default.
+A third write clause, `tag_prefixes`, admits a guest event of one of a rule's kinds when it carries the rule's tag with a value starting with one of the rule's prefixes. It is off by default.
 
-This is what lets a relay host comments for one web site without admitting kind 1111 from the whole protocol. A NIP-22 comment names the page it is about in its root scope — an uppercase `I` tag holding the page URL, per NIP-73 — while a note referencing that page, or a kind 17 reaction to it, names it in the lowercase `i`. So a site relay configures both:
+This is what lets a relay host comments for one web site without admitting kind 1111 from the whole protocol. A NIP-22 comment names the page it is about in its root scope — an uppercase `I` tag holding the page URL, per NIP-73 — while a kind 1 note referencing that page, or a kind 17 reaction to it, names it in the lowercase `i`. So a site relay configures both, each for its own kinds:
 
 ```json
 [
-  {"tag": "I", "prefixes": ["https://www.example.com/"]},
-  {"tag": "i", "prefixes": ["https://www.example.com/"]}
+  {"tag": "I", "prefixes": ["https://www.example.com/"], "kinds": [1111]},
+  {"tag": "i", "prefixes": ["https://www.example.com/"], "kinds": [1, 17]}
 ]
 ```
 
-**Any one rule satisfies the list**, and `tagged_to_tenant` and `tag_prefixes` are likewise alternatives rather than both-required — so one relay can take gift wraps addressed to you *and* comments naming your pages. The `kinds` list stays a precondition every guest write must pass.
+**A rule admits only the kinds it lists**, so a rule for page comments does not admit a gift wrap, a Nostr Connect request or a zap receipt that carries the page tag. `kinds` is required and lists at least one kind. **Any one rule satisfies the list**, and `tagged_to_tenant` and `tag_prefixes` are likewise alternatives rather than both-required — so one relay can take gift wraps addressed to you *and* comments naming your pages. `tagged_to_tenant` covers every writable kind. With `tagged_to_tenant` off and no rules there is no provenance check at all, and a guest can write any writable kind. The `kinds` list stays a precondition every guest write must pass.
 
-The match is exact and case-sensitive, and there is no read equivalent — a prefix cannot be expressed as a NIP-01 filter, and the write rule makes one unnecessary. See [ADR-0018](docs/adr/0018-guest-writes-can-be-admitted-by-tag-value-prefix.md) and [ADR-0019](docs/adr/0019-guest-write-provenance-is-a-set-of-alternatives.md).
+The match is exact and case-sensitive, and there is no read equivalent — a prefix cannot be expressed as a NIP-01 filter, and the write rule makes one unnecessary. See [ADR-0044](docs/adr/0044-a-tag-prefix-rule-admits-only-the-kinds-it-lists.md) and [ADR-0019](docs/adr/0019-guest-write-provenance-is-a-set-of-alternatives.md).
+
+**Upgrading with rules already saved.** Rules saved before they named their kinds have none, and the relay refuses to start with such a policy rather than drop the rules and admit more than you configured. It names the `guest_policy` setting. Add `kinds` to each rule in that setting's JSON in the `settings` table, or delete the row to start from the default policy and set your rules again through `setguestpolicy`.
 
 ### Privacy of encrypted kinds (NIP-17, NIP-46)
 
-Kinds 1059 and 21059 (NIP-59 gift wraps and ephemeral gift wraps / NIP-17 DMs) are in the default guest **write** set but not the read set, and kind 24133 (NIP-46 Nostr Connect) is in both — so anyone can send you a DM or use a bunker without authenticating, while DM content stays encrypted and gift wraps stay unreadable by guests. Gift wraps are deliberately excluded from the readable kinds as defence in depth: even if `from_tenants_only` were flipped off, the kind gate still hides them. How the policy achieves that — and the residual NIP-46 metadata trade-off it accepts — is recorded in [ADR-0007](docs/adr/0007-guest-readable-kinds-are-the-tenants-public-presence.md) (the readable-kind set), [ADR-0036](docs/adr/0036-both-gift-wrap-kinds-are-guest-writable-and-excluded-from-the-guest-readable-kinds.md) (the gift-wrap exclusion) and [ADR-0013](docs/adr/0013-global-read-kinds-open-nip46-connect-to-unauthenticated-signers.md) (NIP-46 Connect). **Do not add kind 1059 or 21059 to `global_kinds`** — it would make gift wraps guest-readable and break the ADR-0036 privacy property. A kind 21059 gift wrap is ephemeral: the relay passes it to the recipient's open subscriptions and never stores it.
+Kinds 1059 and 21059 (NIP-59 gift wraps and ephemeral gift wraps / NIP-17 DMs) are in the default guest **write** set but not the read set, and kind 24133 (NIP-46 Nostr Connect) is in both — so anyone can send you a DM or use a bunker without authenticating, while DM content stays encrypted and gift wraps stay unreadable by guests. Gift wraps are deliberately excluded from the readable kinds as defence in depth: even if `from_tenants_only` were flipped off, the kind gate still hides them. How the policy achieves that — and the residual NIP-46 metadata trade-off it accepts — is recorded in [ADR-0007](docs/adr/0007-guest-readable-kinds-are-the-tenants-public-presence.md) (the readable-kind set), [ADR-0036](docs/adr/0036-both-gift-wrap-kinds-are-guest-writable-and-excluded-from-the-guest-readable-kinds.md) (the gift-wrap exclusion) and [ADR-0013](docs/adr/0013-global-read-kinds-open-nip46-connect-to-unauthenticated-signers.md) (NIP-46 Connect). **Do not add kind 1059 or 21059 to `global_kinds`.** It would expose no gift wrap, because innis/nostr-relay serves a wrap only to the key it names whatever the policy allows, but it would defeat both of ADR-0036's policy gates. A kind 21059 gift wrap is ephemeral: the relay passes it to the recipient's open subscriptions and never stores it.
 
 ### Direct messages (NIP-17 inbox)
 
 The relay works out of the box as a NIP-17 direct-message inbox for its tenant(s):
 
-- **Receiving** — anyone can publish a kind 1059 gift wrap tagged to a tenant without authenticating (guest write set, `tagged_to_tenant`). NIP-59's randomised back-dated timestamps (up to two days) are accepted. A gift wrap is kept until it expires or is deleted; reading one does not remove it, so a client that fetches its inbox twice sees the same wraps.
-- **Reading your inbox** — the recipient tenant authenticates over NIP-42 and reads its `#p` mailbox. A `#p`-for-tenant subscription is scope-exceeding, so the relay issues an AUTH challenge and, once authenticated, delivers the wraps at full scope.
-- **Privacy** — no guest can read a gift wrap: the ephemeral wrapper author fails the tenant author gate, and the gift-wrap kinds are excluded from the readable kinds (see above).
+- **Receiving** — anyone can publish a kind 1059 gift wrap tagged to a tenant without authenticating (guest write set, `tagged_to_tenant`). NIP-59's randomised back-dated timestamps (up to two days) are accepted. A gift wrap is kept until it expires or you delete it: a NIP-09 deletion naming a wrap addressed to you removes it, as NIP-59 asks, although the wrap was signed by a one-time key. Reading one does not remove it, so a client that fetches its inbox twice sees the same wraps.
+- **Reading your inbox** — the recipient tenant authenticates over NIP-42 and reads its `#p` mailbox. Before it has, a `{"kinds":[1059],"#p":[...]}` subscription is narrowed to nothing, so the relay answers `CLOSED` `auth-required:` with an AUTH challenge; once authenticated, the client sends the `REQ` again and the relay delivers the wraps addressed to it. Authenticating does not widen a subscription already open.
+- **Privacy** — no guest can read a gift wrap: the ephemeral wrapper author fails the tenant author gate, and the gift-wrap kinds are excluded from the readable kinds (see above). A tenant reads only the wraps addressed to it: on every filter the store matches a gift wrap only where its `p` tag names a key the connection authenticated as, so `{}` or an `ids` lookup returns your own wraps among your other events, and `{"kinds":[1059],"#p":["<your pubkey>"]}` fetches the inbox alone.
 - **Discovery** — publish a kind 10050 DM relay list naming this relay; it is guest-readable, so senders can find where to deliver your DMs.
 
 Point your kind 10050 at this relay and it becomes your DM inbox. Message confidentiality is provided entirely by NIP-17/NIP-59 client-side encryption; the relay stores ciphertext and never parses it.
@@ -104,16 +106,18 @@ Point your kind 10050 at this relay and it becomes your DM inbox. Message confid
 | 1   | Basic protocol (EVENT, REQ, CLOSE, OK, EOSE, NOTICE) |
 | 9   | Event deletion |
 | 11  | Relay information document |
-| 17  | Direct-message inbox: gift wraps addressed to a tenant are accepted from anyone and served only to that tenant behind AUTH. Advertised while the guest policy keeps it so |
+| 17  | Direct-message inbox: gift wraps addressed to a tenant are accepted from anyone and served only to that tenant behind AUTH. Advertised while the guest policy accepts gift wraps addressed to a tenant |
 | 40  | Event expiration: refused on arrival, withheld from reads, and swept from storage every ten minutes |
 | 42  | Authentication |
 | 45  | Event COUNT over the events the same filters would return, approximate beyond `max_limit` matches |
 | 50  | Search (full-text via SQLite FTS5) |
+| 59  | Gift wraps: a kind 1059 or 21059 event is served only to a connection authenticated as a key its `p` tag names, and that key can delete it with a NIP-09 deletion; kind 21059 is never stored |
+| 67  | EOSE completeness hint: a `REQ` narrowed to what a guest may read ends with an AUTH challenge and an `EOSE` carrying the `"auth"` hint |
 | 70  | Protected events: a `-` tagged event is accepted only from a connection authenticated as its author |
 | 86  | Relay management API |
 | 98  | HTTP auth (management API authentication) |
 
-These are the NIPs the relay advertises in its NIP-11 document. NIP-17 is the one that follows the runtime policy: it is listed only while gift wraps are guest-writable to a tenant and not guest-readable, so a sender's client is never told to deliver mail the relay would refuse or expose (see [ADR-0033](docs/adr/0033-nip17-is-advertised-only-while-the-guest-policy-makes-the-relay-an-inbox.md)). Only a tenant can authenticate here, so in practice only a tenant can publish a NIP-70 protected event (see [ADR-0037](docs/adr/0037-the-nip70-author-rule-is-the-relay-librarys-and-this-policy-does-not-repeat-it.md)).
+These are the NIPs the relay advertises in its NIP-11 document. NIP-17 is the one that follows the runtime policy: it is listed while a guest can deliver a gift wrap addressed to a tenant, whichever provenance check admits it (`tagged_to_tenant`, a `tag_prefixes` rule listing kind 1059 that the wrap's `p` tag meets, or no check configured), so a sender's client is never told to deliver mail the relay would refuse. The read policy does not change it, because innis/nostr-relay serves a gift wrap only to a connection authenticated as the key it names, whatever that policy allows (see [ADR-0042](docs/adr/0042-nip17-is-advertised-while-the-guest-policy-accepts-gift-wraps-addressed-to-a-tenant.md)). Only a tenant can authenticate here, so in practice only a tenant can publish a NIP-70 protected event (see [ADR-0037](docs/adr/0037-the-nip70-author-rule-is-the-relay-librarys-and-this-policy-does-not-repeat-it.md)).
 
 ## Storage
 
@@ -136,8 +140,9 @@ The database lives in `data/` and the caches in `var/`. Back up `data/`; you can
 
 ## Requirements
 
-- PHP 8.4+ with `ext-pdo_sqlite`, `ext-pcntl`, `ext-zlib`, `ext-gmp`, `ext-intl`, `ext-mbstring`, `ext-ctype`, `ext-openssl` and `ext-sodium`
+- PHP 8.4+ with `ext-pdo_sqlite`, `ext-pcntl`, `ext-zlib`, `ext-gmp`, `ext-intl`, `ext-mbstring`, `ext-ctype`, `ext-filter`, `ext-tokenizer`, `ext-json`, `ext-openssl` and `ext-sodium`
 - `ext-ffi` with `libsecp256k1` for native signature verification. A deployment can run without it, on a pure-PHP fallback; a development install cannot, because the test suite exercises the native path and `ext-ffi` is a dev requirement
+- For a development install, also `ext-dom`, `ext-libxml`, `ext-xmlwriter`, `ext-phar`, `ext-iconv` and `ext-hash`, which PHPUnit and PHP-CS-Fixer require
 - [Caddy](https://caddyserver.com/) (or another reverse proxy) for TLS in a public deployment
 
 ## Install
@@ -149,10 +154,10 @@ composer install
 cp config/relay.example.php config/relay.php
 ```
 
-**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.2.0`) in its NIP-11 document and landing page rather than a branch ref:
+**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.3.0`) in its NIP-11 document and landing page rather than a branch ref:
 
 ```bash
-git checkout v0.2.0
+git checkout v0.3.0
 ```
 
 The version is read from the git state at install time: a tag checkout reports that tag, while staying on `master` (or pulling past the tag) reports `dev-master@<sha>`.

@@ -19,6 +19,7 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\Query\FetchTotalsQuery;
 use Innis\Hubstr\Relay\Infrastructure\Worker\Query\FindByFiltersQuery;
 use Innis\Hubstr\Relay\Infrastructure\Worker\ReadContext;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteContext;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
 use Innis\Nostr\Core\Domain\Collection\TagCollection;
@@ -31,6 +32,7 @@ use Innis\Nostr\Relay\Domain\Collection\StoredEventCollection;
 use Innis\Nostr\Relay\Domain\ValueObject\StoredEvent;
 use PDO;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 final class ReadContextTest extends TestCase
 {
@@ -48,14 +50,20 @@ final class ReadContextTest extends TestCase
         $this->keyPair = KeyPair::generate(SignedEventFactory::signer());
     }
 
+    public function testFindByFiltersQueryAnswersWithStoredEvents(): void
+    {
+        $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'find me'));
+
+        self::assertInstanceOf(StoredEventCollection::class, new FindByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous())->applyTo($this->context));
+    }
+
     public function testFindByFiltersQueryReturnsMatchingEvents(): void
     {
         $event = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'find me');
         $this->writeStore->store($event);
 
-        $result = new FindByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]))->applyTo($this->context);
+        $result = $this->found(new FindByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous()));
 
-        self::assertInstanceOf(StoredEventCollection::class, $result);
         self::assertSame([$event->getId()->toHex()], array_map(static fn (StoredEvent $stored): string => $stored->getHeader()->getId()->toHex(), $result->toArray()));
     }
 
@@ -64,10 +72,7 @@ final class ReadContextTest extends TestCase
         $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'one'));
         $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'two'));
 
-        $result = new FindByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1], 'limit' => 1])]))->applyTo($this->context);
-
-        self::assertInstanceOf(StoredEventCollection::class, $result);
-        self::assertCount(1, $result);
+        self::assertCount(1, $this->found(new FindByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1], 'limit' => 1])]), ActingKeysMother::anonymous())));
     }
 
     public function testCountByFiltersQueryReturnsCount(): void
@@ -75,7 +80,7 @@ final class ReadContextTest extends TestCase
         $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'one'));
         $this->writeStore->store(SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'two'));
 
-        $result = new CountByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), 100)->applyTo($this->context);
+        $result = new CountByFiltersQuery(new FilterCollection([Filter::tryFromArray(['kinds' => [1]])]), ActingKeysMother::anonymous(), 100)->applyTo($this->context);
 
         self::assertEquals(EventCount::exact(2), $result);
     }
@@ -107,5 +112,12 @@ final class ReadContextTest extends TestCase
 
         self::assertInstanceOf(WebOfTrustScore::class, $result);
         self::assertTrue($result->isFollowed());
+    }
+
+    private function found(FindByFiltersQuery $query): StoredEventCollection
+    {
+        $result = $query->applyTo($this->context);
+
+        return $result instanceof StoredEventCollection ? $result : throw new RuntimeException(sprintf('A find query answered %s, not stored events', get_debug_type($result)));
     }
 }

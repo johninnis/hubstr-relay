@@ -13,6 +13,7 @@ use Innis\Hubstr\Relay\Application\UseCase\ImportEventUseCase;
 use Innis\Hubstr\Relay\Domain\Enum\ImportOutcome;
 use Innis\Hubstr\Relay\Infrastructure\Persistence\EventQueryStore;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteContext;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Application\Port\ClockInterface;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
@@ -131,7 +132,7 @@ final class ImportEventUseCaseTest extends TestCase
 
         new ImportEventUseCase(new ImportAdmission($validator, $policyState, $clock), WriteContext::forConnection($pdo)->getEventWriteStore())->import($line);
 
-        $stored = new EventQueryStore($pdo)->findByFilters(new FilterCollection([Filter::from(ids: new EventIdCollection([$event->getId()]))]))->toArray();
+        $stored = new EventQueryStore($pdo)->findByFilters(new FilterCollection([Filter::from(ids: new EventIdCollection([$event->getId()]))]), ActingKeysMother::anonymous())->toArray();
         self::assertSame([$event->toJson()], array_map(static fn (StoredEvent $row): string => $row->getEncoded()->toJson(), $stored));
     }
 

@@ -77,7 +77,7 @@ Every error carries an HTTP status as well as the message:
 
 | Status | When |
 |--------|------|
-| `400` | The request is malformed or a parameter does not parse: invalid JSON, a body that is not a `{"method", "params"}` envelope, an unknown method, an invalid pubkey or IP address, a missing required string, a banned word shorter than 3 characters, relay metadata that breaks its rules, rate limits that are not positive integers, a guest policy with an unparseable tag rule |
+| `400` | The request is malformed or a parameter does not parse: invalid JSON, a body that is not a `{"method", "params"}` envelope, an unknown method, an invalid pubkey or IP address, a missing required string, a banned word shorter than 3 characters, relay metadata that breaks its rules, rate limits that are not positive integers, a guest policy with an unparseable tag rule, including one that lists no kinds |
 | `401` | The `Authorization` header is missing, or the NIP-98 event in it does not validate: a bad signature, a timestamp outside the 60-second window, a `u`, `method` or `payload` tag that does not match the request, or an auth event whose id the relay has already accepted (a replay). The message is `auth-required: <reason>` |
 | `403` | The NIP-98 event is valid but its signer is not a tenant: `Pubkey is not a relay tenant` |
 | `409` | The request is well formed but the relay's state refuses it: `Cannot remove the last tenant`, `Cannot blacklist an active tenant pubkey` |
@@ -365,11 +365,11 @@ The response above is the built-in default, which applies until a policy is firs
 
 `read.kinds` and `read.global_kinds` together are the whole readable set: a guest may read a kind only if it appears in one of them. An empty `read.kinds` leaves only the global kinds readable, and emptying both means guests read nothing. Kinds are integers; an entry that is not an integer is dropped, which only ever narrows the set.
 
-`write.tag_prefixes` is a list of rules, each naming a tag and the value prefixes it will accept. A guest event satisfies the list when **any one** rule matches. An empty list -- the default -- means no such requirement. The match is exact and case-sensitive, and it applies to writes only; there is no read equivalent, because a prefix cannot be expressed as a NIP-01 filter (see [ADR-0018](adr/0018-guest-writes-can-be-admitted-by-tag-value-prefix.md) and [ADR-0019](adr/0019-guest-write-provenance-is-a-set-of-alternatives.md)).
+`write.tag_prefixes` is a list of rules, each naming a `tag`, the value `prefixes` it will accept and the event `kinds` it admits: `{"tag": "I", "prefixes": ["https://www.example.com/"], "kinds": [1111]}`. A rule matches only an event of one of its kinds that carries its tag with a value starting with one of its prefixes, so a rule for page comments does not admit a gift wrap, a Nostr Connect request or a zap receipt that carries the page tag. `kinds` is required and must list at least one kind, and a kind listed twice is kept once; a rule may name a kind that is not in `write.kinds`, and admits nothing for it until it is. A guest event satisfies the list when **any one** rule matches. An empty list -- the default -- means no rule is configured. The match is exact and case-sensitive, and it applies to writes only; there is no read equivalent, because a prefix cannot be expressed as a NIP-01 filter (see [ADR-0044](adr/0044-a-tag-prefix-rule-admits-only-the-kinds-it-lists.md) and [ADR-0019](adr/0019-guest-write-provenance-is-a-set-of-alternatives.md)).
 
-Whether the relay advertises NIP-17 in its relay-information document follows this policy: 17 is listed while kind 1059 is a writable kind with `tagged_to_tenant` on and is in neither `read.kinds` nor `read.global_kinds`.
+Whether the relay advertises NIP-17 in its relay-information document follows this policy: 17 is listed while kind 1059 is a writable kind and a gift wrap whose only tag is a `p` tag naming a tenant meets the provenance checks: `tagged_to_tenant` on, a `tag_prefixes` rule whose `kinds` include 1059, for the `p` tag, with a prefix a tenant's key starts with, or neither check configured. A rule checking any other tag does not count, even one listing 1059, because a NIP-17 wrap carries no other tag for it to match. What `read.kinds` and `read.global_kinds` hold does not change it, because the relay serves a gift wrap only to a connection authenticated as the key it names, whatever the read policy allows (see [ADR-0042](adr/0042-nip17-is-advertised-while-the-guest-policy-accepts-gift-wraps-addressed-to-a-tenant.md)).
 
-`tagged_to_tenant` and `tag_prefixes` are **alternatives**, not both-required: an event satisfies the policy by meeting whichever of the configured checks it can. A relay with both on takes gift wraps (which tag a tenant and name no page) and page comments (which name a page and tag no tenant) alike. The `kinds` list is not an alternative -- it is a precondition every guest write must pass.
+`tagged_to_tenant` and `tag_prefixes` are **alternatives**, not both-required: an event satisfies the policy by meeting whichever of the configured checks it can. `tagged_to_tenant` covers every writable kind; a rule covers only its own kinds. A relay with both on takes gift wraps (which tag a tenant and name no page) and page comments (which name a page and tag no tenant) alike. With `tagged_to_tenant` off and no rules there is no provenance check, and a guest can write any event of a writable kind. The `kinds` list is not an alternative -- it is a precondition every guest write must pass.
 
 #### `setguestpolicy`
 - **Params**: `[policy_object]` -- same structure as `getguestpolicy` result
@@ -383,15 +383,15 @@ The submitted object **replaces the whole policy**. A key that is left out does 
 {"result": true}
 ```
 
-Confining guests to comments on one site's pages, where the tag is NIP-22's uppercase `I` root scope and the value is the page URL:
+Confining guest writes to comments, notes and reactions about one site's pages, where the tag is NIP-22's uppercase `I` root scope or NIP-73's lowercase `i` and the value is the page URL:
 
 ```json
-{"method": "setguestpolicy", "params": [{"read": {"kinds": [1111], "from_tenants_only": false}, "write": {"kinds": [1111], "tagged_to_tenant": false, "tag_prefixes": [{"tag": "I", "prefixes": ["https://www.example.com/"]}, {"tag": "i", "prefixes": ["https://www.example.com/"]}]}}]}
+{"method": "setguestpolicy", "params": [{"read": {"kinds": [1111], "from_tenants_only": false}, "write": {"kinds": [1111, 1, 17], "tagged_to_tenant": false, "tag_prefixes": [{"tag": "I", "prefixes": ["https://www.example.com/"], "kinds": [1111]}, {"tag": "i", "prefixes": ["https://www.example.com/"], "kinds": [1, 17]}]}}]}
 ```
 
-Two rules, because a comment names its page in NIP-22's uppercase root tag while a note or a kind 17 reaction names it in NIP-73's lowercase one. Either satisfies the list.
+Two rules, because a comment names its page in NIP-22's uppercase root tag, on a reply as on a top-level comment, while a kind 1 note or a kind 17 reaction names it in NIP-73's lowercase one. Either satisfies the list, each for its own kinds.
 
-A rule that names no tag, or lists no prefix, or lists an empty one, refuses the whole submission with `400` and the stored policy is left unchanged. It is not defaulted away, because silently storing no requirement would leave the relay admitting everything while the operator believed it was constrained. Send `"tag_prefixes": []` or `null` to remove all rules.
+A rule that names no tag, lists no prefix or an empty one, or lists no kinds, refuses the whole submission with `400` and the stored policy is left unchanged. It is not defaulted away, because silently storing no requirement would leave the relay admitting everything while the operator believed it was constrained. Send `"tag_prefixes": []` or `null` to remove all rules.
 
 ### Rate Limits
 

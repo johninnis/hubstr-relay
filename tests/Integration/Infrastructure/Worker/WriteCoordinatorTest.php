@@ -13,6 +13,7 @@ use Innis\Hubstr\Relay\Infrastructure\Worker\Command\StoreEventsCommand;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WorkerFailure;
 use Innis\Hubstr\Relay\Infrastructure\Worker\WriteCoordinator;
 use Innis\Hubstr\Relay\Tests\Fake\QueueChannel;
+use Innis\Hubstr\Relay\Tests\Support\ActingKeysMother;
 use Innis\Hubstr\Relay\Tests\Support\SignedEventFactory;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
@@ -22,6 +23,7 @@ use Innis\Nostr\Relay\Domain\Enum\EventStoreOutcome;
 use Monolog\Handler\TestHandler;
 use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 use function Amp\async;
 use function Amp\delay;
@@ -48,17 +50,27 @@ final class WriteCoordinatorTest extends TestCase
         self::assertInstanceOf(StoreEventsCommand::class, $channel->sent[0]);
     }
 
-    public function testDeleteByEventIdsDispatchesCommandAndReturnsCount(): void
+    public function testDeleteByEventIdsReturnsTheCountTheWorkerReports(): void
     {
-        $author = SignedEventFactory::pubkey('aa');
-        $eventId = EventId::tryFromHex(str_repeat('bb', 32)) ?? self::fail('Invalid event id');
+        $coordinator = new WriteCoordinator(new QueueChannel([5]));
+
+        self::assertSame(5, async(static fn () => $coordinator->applyForInt(self::deleteEventIdsCommand()))->await());
+    }
+
+    public function testDeleteByEventIdsDispatchesItsCommandToTheWorker(): void
+    {
         $channel = new QueueChannel([5]);
         $coordinator = new WriteCoordinator($channel);
+        async(static fn () => $coordinator->applyForInt(self::deleteEventIdsCommand()))->await();
 
-        $deleted = async(static fn () => $coordinator->applyForInt(new DeleteEventIdsCommand(new EventIdCollection([$eventId]), $author)))->await();
-
-        self::assertSame(5, $deleted);
         self::assertInstanceOf(DeleteEventIdsCommand::class, $channel->sent[0]);
+    }
+
+    private static function deleteEventIdsCommand(): DeleteEventIdsCommand
+    {
+        $eventId = EventId::tryFromHex(str_repeat('bb', 32)) ?? throw new RuntimeException('The event id did not parse');
+
+        return new DeleteEventIdsCommand(new EventIdCollection([$eventId]), ActingKeysMother::of(SignedEventFactory::pubkey('aa')));
     }
 
     public function testStoreThrowsOnUnexpectedResult(): void
@@ -78,7 +90,7 @@ final class WriteCoordinatorTest extends TestCase
 
         $this->expectException(WorkerResultException::class);
 
-        async(static fn () => $coordinator->applyForInt(new DeleteEventIdsCommand(new EventIdCollection([]), $author)))->await();
+        async(static fn () => $coordinator->applyForInt(new DeleteEventIdsCommand(new EventIdCollection([]), ActingKeysMother::of($author))))->await();
     }
 
     public function testStoreErrorsWhenChannelClosedInsteadOfHanging(): void
@@ -104,7 +116,7 @@ final class WriteCoordinatorTest extends TestCase
         $this->expectException(WorkerResultException::class);
         $this->expectExceptionMessage('Write worker channel closed');
 
-        async(static fn () => $coordinator->applyForInt(new DeleteEventIdsCommand(new EventIdCollection([]), $author)))->await();
+        async(static fn () => $coordinator->applyForInt(new DeleteEventIdsCommand(new EventIdCollection([]), ActingKeysMother::of($author))))->await();
     }
 
     public function testWorkerFailureErrorsThatStoreButKeepsTheWritePathAlive(): void

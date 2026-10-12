@@ -7,6 +7,7 @@ namespace Innis\Hubstr\Relay\Domain\Collection;
 use Innis\Hubstr\Relay\Domain\ValueObject\TagPrefixRequirement;
 use Innis\Nostr\Core\Domain\Collection\TagCollection;
 use Innis\Nostr\Core\Domain\Collection\TypedCollection;
+use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Override;
 
 /**
@@ -21,19 +22,20 @@ final class TagPrefixRequirementCollection extends TypedCollection
     }
 
     // Deliberate: any one requirement satisfies the list, never all of them — see ADR-0019
-    public function isSatisfiedBy(TagCollection $tags): bool
+    public function isSatisfiedBy(EventKind $kind, TagCollection $tags): bool
     {
         return array_any(
             $this->toArray(),
-            static fn (TagPrefixRequirement $requirement) => $requirement->isSatisfiedBy($tags),
+            static fn (TagPrefixRequirement $requirement) => $requirement->isSatisfiedBy($kind, $tags),
         );
     }
 
-    /**
-     * @param array<array-key, mixed> $data
-     */
-    public static function tryFromArray(array $data): ?self
+    public static function tryFromArray(mixed $data): ?self
     {
+        if (!is_array($data) || !array_is_list($data)) {
+            return null;
+        }
+
         $requirements = [];
 
         foreach ($data as $entry) {
@@ -54,7 +56,7 @@ final class TagPrefixRequirementCollection extends TypedCollection
     }
 
     /**
-     * @return list<array{tag: string, prefixes: list<string>}>
+     * @return list<array{tag: string, prefixes: list<string>, kinds: list<int>}>
      */
     public function toWireArray(): array
     {

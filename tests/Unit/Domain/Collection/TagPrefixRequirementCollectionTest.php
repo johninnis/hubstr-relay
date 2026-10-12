@@ -6,7 +6,9 @@ namespace Innis\Hubstr\Relay\Tests\Unit\Domain\Collection;
 
 use Innis\Hubstr\Relay\Domain\Collection\TagPrefixRequirementCollection;
 use Innis\Hubstr\Relay\Domain\ValueObject\TagPrefixRequirement;
+use Innis\Nostr\Core\Domain\Collection\EventKindCollection;
 use Innis\Nostr\Core\Domain\Collection\TagCollection;
+use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\Tag;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\TagType;
 use PHPUnit\Framework\TestCase;
@@ -17,29 +19,34 @@ final class TagPrefixRequirementCollectionTest extends TestCase
 
     public function testAnEmptyCollectionIsSatisfiedByNothing(): void
     {
-        $this->assertFalse(new TagPrefixRequirementCollection()->isSatisfiedBy($this->tags('I', self::SITE.'page')));
+        $this->assertFalse(new TagPrefixRequirementCollection()->isSatisfiedBy(self::comment(), $this->tags('I', self::SITE.'page')));
     }
 
     public function testSatisfiedWhenTheUppercaseRootRuleMatches(): void
     {
-        $this->assertTrue($this->rootOrParent()->isSatisfiedBy($this->tags('I', self::SITE.'page')));
+        $this->assertTrue($this->rootOrParent()->isSatisfiedBy(self::comment(), $this->tags('I', self::SITE.'page')));
     }
 
     public function testSatisfiedWhenTheLowercaseParentRuleMatches(): void
     {
-        $this->assertTrue($this->rootOrParent()->isSatisfiedBy($this->tags('i', self::SITE.'page')));
+        $this->assertTrue($this->rootOrParent()->isSatisfiedBy(self::comment(), $this->tags('i', self::SITE.'page')));
+    }
+
+    public function testNotSatisfiedByAnEventOfAKindNoMatchingRuleLists(): void
+    {
+        $this->assertFalse($this->rootOrParent()->isSatisfiedBy(EventKind::fromInt(EventKind::NOSTR_CONNECT), $this->tags('I', self::SITE.'page')));
     }
 
     public function testNotSatisfiedWhenNoRuleMatches(): void
     {
-        $this->assertFalse($this->rootOrParent()->isSatisfiedBy($this->tags('I', 'https://elsewhere.example/page')));
+        $this->assertFalse($this->rootOrParent()->isSatisfiedBy(self::comment(), $this->tags('I', 'https://elsewhere.example/page')));
     }
 
     public function testTryFromArrayReadsSeveralRules(): void
     {
         $collection = TagPrefixRequirementCollection::tryFromArray([
-            ['tag' => 'I', 'prefixes' => [self::SITE]],
-            ['tag' => 'i', 'prefixes' => [self::SITE]],
+            ['tag' => 'I', 'prefixes' => [self::SITE], 'kinds' => [EventKind::COMMENT]],
+            ['tag' => 'i', 'prefixes' => [self::SITE], 'kinds' => [EventKind::COMMENT]],
         ]);
 
         $this->assertEquals($this->rootOrParent(), $collection);
@@ -61,8 +68,8 @@ final class TagPrefixRequirementCollectionTest extends TestCase
     public function testTryFromArrayRejectsTheWholeListWhenOneEntryIsMalformed(): void
     {
         $this->assertNull(TagPrefixRequirementCollection::tryFromArray([
-            ['tag' => 'I', 'prefixes' => [self::SITE]],
-            ['tag' => 'i', 'prefixes' => []],
+            ['tag' => 'I', 'prefixes' => [self::SITE], 'kinds' => [EventKind::COMMENT]],
+            ['tag' => 'i', 'prefixes' => [self::SITE]],
         ]));
     }
 
@@ -77,9 +84,14 @@ final class TagPrefixRequirementCollectionTest extends TestCase
     private function rootOrParent(): TagPrefixRequirementCollection
     {
         return new TagPrefixRequirementCollection([
-            new TagPrefixRequirement(TagType::rootExternalContent(), [self::SITE]),
-            new TagPrefixRequirement(TagType::externalContent(), [self::SITE]),
+            new TagPrefixRequirement(TagType::rootExternalContent(), [self::SITE], EventKindCollection::fromInts([EventKind::COMMENT])),
+            new TagPrefixRequirement(TagType::externalContent(), [self::SITE], EventKindCollection::fromInts([EventKind::COMMENT])),
         ]);
+    }
+
+    private static function comment(): EventKind
+    {
+        return EventKind::fromInt(EventKind::COMMENT);
     }
 
     private function tags(string $name, string $value): TagCollection
