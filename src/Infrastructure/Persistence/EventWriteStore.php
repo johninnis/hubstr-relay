@@ -15,11 +15,13 @@ use Innis\Nostr\Core\Domain\Collection\EventCollection;
 use Innis\Nostr\Core\Domain\Collection\EventCoordinateCollection;
 use Innis\Nostr\Core\Domain\Collection\EventIdCollection;
 use Innis\Nostr\Core\Domain\Entity\Event;
+use Innis\Nostr\Core\Domain\Service\DeletionCoverage;
 use Innis\Nostr\Core\Domain\ValueObject\Content\EventKind;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventCoordinate;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventId;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\EventVersion;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
+use Innis\Nostr\Core\Domain\ValueObject\Protocol\Filter;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\Hashtag;
 use Innis\Nostr\Core\Domain\ValueObject\Tag\TagType;
 use Innis\Nostr\Core\Domain\ValueObject\Timestamp;
@@ -102,18 +104,13 @@ final readonly class EventWriteStore implements EventWriterInterface
         // Deliberate: prepared on the connection for this one call, never through the runner — a statement whose placeholder count varies would be cached once per distinct count for the life of the connection — see ADR-0020
         $statement = $this->pdo->prepare(sprintf(
             'DELETE FROM events WHERE event_id IN (%s) AND kind <> ? AND (pubkey IN (%s) OR (kind IN (%s) AND event_id IN (SELECT event_id FROM event_tags WHERE tag_name = ? AND tag_value IN (SELECT value FROM json_each(?)))))',
-            self::placeholders($eventIds->count()),
-            self::placeholders($keys->count()),
-            self::placeholders(count($confinedKinds)),
+            SqliteFilterClause::placeholders($eventIds->count()),
+            SqliteFilterClause::placeholders($keys->count()),
+            SqliteFilterClause::placeholders(count($confinedKinds)),
         ));
         $statement->execute($params);
 
         return $statement->rowCount();
-    }
-
-    private static function placeholders(int $count): string
-    {
-        return implode(',', array_fill(0, $count, '?'));
     }
 
     public function deleteByCoordinates(EventCoordinateCollection $coordinates, PublicKey $author, Timestamp $until): int
@@ -152,8 +149,7 @@ final readonly class EventWriteStore implements EventWriterInterface
         }
 
         // Deliberate: prepared on the connection for this one call, never through the runner — the row count differs on every final chunk — see ADR-0020
-        $placeholders = implode(',', array_fill(0, count($rowIds), '?'));
-        $statement = $this->pdo->prepare("DELETE FROM events WHERE rowid IN ({$placeholders})");
+        $statement = $this->pdo->prepare('DELETE FROM events WHERE rowid IN ('.SqliteFilterClause::placeholders(count($rowIds)).')');
         $statement->execute($rowIds);
 
         return $statement->rowCount();
@@ -229,6 +225,10 @@ final readonly class EventWriteStore implements EventWriterInterface
             return EventStoreOutcome::Duplicate;
         }
 
+        if ($this->isDeleted($event)) {
+            return EventStoreOutcome::Deleted;
+        }
+
         $coordinate = EventCoordinate::tryFromEvent($event);
 
         if (null !== $coordinate && !$this->supersedeIfNewer($event, $this->incumbentAt($coordinate))) {
@@ -240,6 +240,36 @@ final readonly class EventWriteStore implements EventWriterInterface
         $this->denormaliser->denormalise($event);
 
         return EventStoreOutcome::Stored;
+    }
+
+    // Deliberate: the requests that could delete an arriving event are fetched with nostr-core's lookup filters and decided by its judgement, in the write that would store the event — see ADR-0046 and nostr-relay ADR-0040
+    private function isDeleted(Event $event): bool
+    {
+        return array_any(
+            DeletionCoverage::lookupFilters($event)->toArray(),
+            fn (Filter $lookup): bool => array_any(
+                $this->storedMatching($lookup),
+                static fn (Event $request): bool => DeletionCoverage::covers($request, $event),
+            ),
+        );
+    }
+
+    /**
+     * @return list<Event>
+     */
+    private function storedMatching(Filter $filter): array
+    {
+        [$where, $params, $joins] = SqliteFilterClause::where(...SqliteFilterClause::conditions($filter));
+
+        // Deliberate: prepared on the connection for this one call, never through the runner — a gift wrap's lookup names one author per key it is addressed to, so the placeholder count varies — see ADR-0020
+        $statement = $this->pdo->prepare("SELECT e.raw_event FROM events e {$joins} {$where}");
+        $statement->execute($params);
+
+        return array_values(array_map(
+            static fn (mixed $raw): Event => (is_string($raw) ? Event::tryFromJson($raw) : null)
+                ?? throw new MalformedEventRowException('A stored event\'s raw_event is not an event'),
+            $statement->fetchAll(PDO::FETCH_COLUMN),
+        ));
     }
 
     private function eventExists(string $eventIdBin): bool

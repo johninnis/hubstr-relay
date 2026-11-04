@@ -155,6 +155,16 @@ final class EventStorageTest extends TestCase
         $this->assertSame([EventStoreOutcome::Stored, EventStoreOutcome::Superseded], $outcomes);
     }
 
+    public function testStoreBatchRefusesAnEventADeletionRequestEarlierInTheBatchDeletes(): void
+    {
+        $note = SignedEventFactory::signedEventAtTime($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'retracted', time() - 100);
+        $request = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::EVENT_DELETION), '', new TagCollection([Tag::event($note->getId())]));
+
+        $outcomes = $this->writeStore->storeBatch(new EventCollection([$request, $note]));
+
+        $this->assertSame([EventStoreOutcome::Stored, EventStoreOutcome::Deleted], $outcomes);
+    }
+
     public function testAFailingEventRollsBackOnlyItselfAndItsNeighboursStillCommit(): void
     {
         $before = SignedEventFactory::signedEvent($this->keyPair, EventKind::fromInt(EventKind::TEXT_NOTE), 'before');

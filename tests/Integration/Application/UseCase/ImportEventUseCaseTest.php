@@ -74,6 +74,14 @@ final class ImportEventUseCaseTest extends TestCase
         self::assertSame(ImportOutcome::Skipped, $outcome);
     }
 
+    public function testSkipsAnEventTheStoreRefusesAsDeleted(): void
+    {
+        $outcome = $this->useCase(valid: true, blacklisted: false, storeOutcome: EventStoreOutcome::Deleted)
+            ->import($this->eventLine());
+
+        self::assertSame(ImportOutcome::Skipped, $outcome);
+    }
+
     public function testFailsAnEventThatDoesNotValidate(): void
     {
         $outcome = $this->useCase(valid: false, blacklisted: false, storeOutcome: EventStoreOutcome::Stored)

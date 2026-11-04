@@ -7,7 +7,6 @@ namespace Innis\Hubstr\Relay\Infrastructure\Persistence;
 use Generator;
 use Innis\Hubstr\Relay\Application\Port\RawEventQueryInterface;
 use Innis\Hubstr\Relay\Domain\Exception\MalformedEventRowException;
-use Innis\Hubstr\Relay\Domain\Service\TagValueNormaliser;
 use Innis\Hubstr\Relay\Domain\ValueObject\RawEvent;
 use Innis\Nostr\Core\Domain\Collection\EventKindCollection;
 use Innis\Nostr\Core\Domain\Collection\FilterCollection;
@@ -89,7 +88,7 @@ final readonly class EventQueryStore implements RawEventQueryInterface
         $expiries = [];
 
         foreach (array_chunk($eventIds, self::EXPIRY_LOOKUP_CHUNK) as $chunk) {
-            [$condition, $params] = self::bytesIn('event_id', $chunk);
+            [$condition, $params] = SqliteFilterClause::bytesIn('event_id', $chunk);
             $stmt = $this->pdo->prepare("SELECT event_id, tag_value FROM event_tags WHERE tag_name = 'expiration' AND {$condition}");
             $stmt->execute($params);
 
@@ -130,7 +129,7 @@ final readonly class EventQueryStore implements RawEventQueryInterface
     #[Override]
     public function findRawByFilter(Filter $filter): Generator
     {
-        [$where, $params, $joins] = self::whereClause(...self::filterConditions($filter));
+        [$where, $params, $joins] = SqliteFilterClause::where(...SqliteFilterClause::conditions($filter));
 
         $sql = "SELECT e.event_id, e.raw_event FROM events e {$joins} {$where} ORDER BY e.created_at ASC";
         $stmt = $this->pdo->prepare($sql);
@@ -294,7 +293,7 @@ final readonly class EventQueryStore implements RawEventQueryInterface
             return [[$addressed ?? '1 = 0'], $addressedParams];
         }
 
-        $otherKind = 'e.kind NOT IN ('.self::placeholders(count($confinedKinds)).')';
+        $otherKind = 'e.kind NOT IN ('.SqliteFilterClause::placeholders(count($confinedKinds)).')';
 
         return [
             [null === $addressed ? $otherKind : "({$otherKind} OR {$addressed})"],
@@ -307,123 +306,9 @@ final readonly class EventQueryStore implements RawEventQueryInterface
      */
     private static function readClause(Filter $filter, ActingKeys $reader): array
     {
-        [$conditions, $params, $joins] = self::filterConditions($filter);
+        [$conditions, $params, $joins] = SqliteFilterClause::conditions($filter);
         [$readerConditions, $readerParams] = self::readableBy($filter, $reader);
 
-        return self::whereClause([...$conditions, ...$readerConditions], [...$params, ...$readerParams], $joins);
-    }
-
-    /**
-     * @return array{list<string>, list<mixed>, string}
-     */
-    private static function filterConditions(Filter $filter): array
-    {
-        $conditions = [];
-        $whereParams = [];
-        $joins = '';
-
-        $ids = $filter->getIds();
-        if (null !== $ids) {
-            if ($ids->isEmpty()) {
-                $conditions[] = '1 = 0';
-            } else {
-                [$condition, $binParams] = self::bytesIn('e.event_id', array_map(static fn (EventId $id): string => $id->toBytes(), $ids->toArray()));
-                $conditions[] = $condition;
-                array_push($whereParams, ...$binParams);
-            }
-        }
-
-        $authors = $filter->getAuthors();
-        if (null !== $authors) {
-            if ($authors->isEmpty()) {
-                $conditions[] = '1 = 0';
-            } else {
-                [$condition, $binParams] = self::bytesIn('e.pubkey', array_map(static fn (PublicKey $author): string => $author->toBytes(), $authors->toArray()));
-                $conditions[] = $condition;
-                array_push($whereParams, ...$binParams);
-            }
-        }
-
-        $kinds = $filter->getKinds()?->toInts();
-        if (null !== $kinds) {
-            if ([] === $kinds) {
-                $conditions[] = '1 = 0';
-            } else {
-                $placeholders = implode(',', array_fill(0, count($kinds), '?'));
-                $conditions[] = "e.kind IN ({$placeholders})";
-                array_push($whereParams, ...$kinds);
-            }
-        }
-
-        $tags = $filter->getTags();
-        if (null !== $tags) {
-            foreach ($tags->getValues() as $tagName => $tagValues) {
-                if ([] === $tagValues) {
-                    $conditions[] = '1 = 0';
-                    continue;
-                }
-
-                $type = TagType::fromString($tagName);
-                $valuePlaceholders = implode(',', array_fill(0, count($tagValues), '?'));
-                // Deliberate: a membership test, not a materialised join, so the planner may drive from the events index when the filter is scoped — see ADR-0025
-                $conditions[] = "e.event_id IN (SELECT event_id FROM event_tags WHERE tag_name = ? AND tag_value IN ({$valuePlaceholders}))";
-                $whereParams[] = $tagName;
-                foreach ($tagValues as $tagValue) {
-                    $whereParams[] = TagValueNormaliser::normalise($type, $tagValue);
-                }
-            }
-        }
-
-        if (null !== $filter->getSince()) {
-            $conditions[] = 'e.created_at >= ?';
-            $whereParams[] = $filter->getSince()->toInt();
-        }
-
-        if (null !== $filter->getUntil()) {
-            $conditions[] = 'e.created_at <= ?';
-            $whereParams[] = $filter->getUntil()->toInt();
-        }
-
-        $search = $filter->getSearch();
-        if (null !== $search) {
-            $sanitised = FtsQuery::allTokens($search);
-            if (null !== $sanitised) {
-                $joins .= ' INNER JOIN events_fts fts ON fts.rowid = e.rowid';
-                $conditions[] = 'fts.content MATCH ?';
-                $whereParams[] = $sanitised;
-            } elseif ('' === trim($search)) {
-                $conditions[] = '1 = 0';
-            }
-        }
-
-        return [$conditions, $whereParams, $joins];
-    }
-
-    /**
-     * @param list<string> $conditions
-     * @param list<mixed>  $params
-     *
-     * @return array{string, list<mixed>, string}
-     */
-    private static function whereClause(array $conditions, array $params, string $joins): array
-    {
-        return [[] === $conditions ? '' : 'WHERE '.implode(' AND ', $conditions), $params, $joins];
-    }
-
-    private static function placeholders(int $count): string
-    {
-        return implode(',', array_fill(0, $count, '?'));
-    }
-
-    /**
-     * @param list<string> $bytes
-     *
-     * @return array{string, list<string>}
-     */
-    private static function bytesIn(string $column, array $bytes): array
-    {
-        $placeholders = implode(',', array_fill(0, count($bytes), '?'));
-
-        return ["{$column} IN ({$placeholders})", $bytes];
+        return SqliteFilterClause::where([...$conditions, ...$readerConditions], [...$params, ...$readerParams], $joins);
     }
 }

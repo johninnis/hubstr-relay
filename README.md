@@ -104,7 +104,7 @@ Point your kind 10050 at this relay and it becomes your DM inbox. Message confid
 | NIP | Description |
 |-----|-------------|
 | 1   | Basic protocol (EVENT, REQ, CLOSE, OK, EOSE, NOTICE) |
-| 9   | Event deletion |
+| 9   | Event deletion: a request removes its author's events and the gift wraps addressed to its author, and an event that arrives after a stored request that deletes it is refused `blocked:` and never stored ([ADR-0046](docs/adr/0046-an-arriving-event-is-checked-against-the-stored-deletion-requests-in-its-write.md)) |
 | 11  | Relay information document |
 | 17  | Direct-message inbox: gift wraps addressed to a tenant are accepted from anyone and served only to that tenant behind AUTH. Advertised while the guest policy accepts gift wraps addressed to a tenant |
 | 40  | Event expiration: refused on arrival, withheld from reads, and swept from storage every ten minutes |
@@ -154,10 +154,10 @@ composer install
 cp config/relay.example.php config/relay.php
 ```
 
-**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.3.0`) in its NIP-11 document and landing page rather than a branch ref:
+**Deploying a release:** check out the release tag *before* installing, so the relay reports the release version (for example `v0.4.0`) in its NIP-11 document and landing page rather than a branch ref:
 
 ```bash
-git checkout v0.3.0
+git checkout v0.4.0
 ```
 
 The version is read from the git state at install time: a tag checkout reports that tag, while staying on `master` (or pulling past the tag) reports `dev-master@<sha>`.
