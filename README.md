@@ -141,7 +141,7 @@ The database lives in `data/` and the caches in `var/`. Back up `data/`; you can
 ## Requirements
 
 - PHP 8.4+ with `ext-pdo_sqlite`, `ext-pcntl`, `ext-zlib`, `ext-gmp`, `ext-intl`, `ext-mbstring`, `ext-ctype`, `ext-filter`, `ext-tokenizer`, `ext-json`, `ext-openssl` and `ext-sodium`
-- `ext-ffi` with `libsecp256k1` for native signature verification. A deployment can run without it, on a pure-PHP fallback; a development install cannot, because the test suite exercises the native path and `ext-ffi` is a dev requirement
+- `ext-ffi`, which `composer.json` requires, and the `libsecp256k1` library, for native signature verification. The service will not start verifying without them, and a web SAPI also needs `ffi.enable=true`
 - For a development install, also `ext-dom`, `ext-libxml`, `ext-xmlwriter`, `ext-phar`, `ext-iconv` and `ext-hash`, which PHPUnit and PHP-CS-Fixer require
 - [Caddy](https://caddyserver.com/) (or another reverse proxy) for TLS in a public deployment
 

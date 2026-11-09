@@ -17,6 +17,7 @@ use Innis\Nostr\Core\Domain\Enum\Nip86Method;
 use Innis\Nostr\Core\Domain\Enum\ReasonPrefix;
 use Innis\Nostr\Core\Domain\Failure\AuthHeaderFailureInterface;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
+use Innis\Nostr\Core\Domain\ValueObject\Protocol\HttpMethod as NostrHttpMethod;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Nip86Request;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Nip86Response;
 use InvalidArgumentException;
@@ -78,7 +79,7 @@ final readonly class RpcHandler
         }
 
         $body = $request->getBody()->buffer();
-        $tenant = $this->tenantAuthenticator->authenticate($authHeader, HttpMethod::Post->value, $body);
+        $tenant = $this->tenantAuthenticator->authenticate($authHeader, NostrHttpMethod::fromString(HttpMethod::Post->value), $body);
 
         if ($tenant instanceof AuthHeaderFailureInterface) {
             return RpcRejection::unauthorised(ReasonPrefix::AuthRequired->format($tenant->message()));

@@ -9,6 +9,7 @@ use Innis\Hubstr\Relay\Domain\Failure\TenantAuthFailure;
 use Innis\Nostr\Core\Application\Service\Nip98ValidatorInterface;
 use Innis\Nostr\Core\Domain\Failure\AuthHeaderFailureInterface;
 use Innis\Nostr\Core\Domain\ValueObject\Identity\PublicKey;
+use Innis\Nostr\Core\Domain\ValueObject\Protocol\HttpMethod;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\Nip98Request;
 use Innis\Nostr\Core\Domain\ValueObject\Protocol\RelayUrl;
 
@@ -21,7 +22,7 @@ final readonly class TenantAuthenticator
     ) {
     }
 
-    public function authenticate(string $authHeader, string $httpMethod, string $requestBody): PublicKey|AuthHeaderFailureInterface|TenantAuthFailure
+    public function authenticate(string $authHeader, HttpMethod $httpMethod, string $requestBody): PublicKey|AuthHeaderFailureInterface|TenantAuthFailure
     {
         $pubkey = $this->nip98Validator->validateAuthHeader(
             $authHeader,

@@ -33,11 +33,12 @@ final class InMemoryNip98ReplayGuard implements Nip98ReplayGuardInterface
             return false;
         }
 
-        $this->seen[$key] = $now + $ttlSeconds;
-
-        if (count($this->seen) > $this->maxEntries) {
-            unset($this->seen[array_key_first($this->seen)]);
+        // Deliberate: a full guard refuses, as evicting a live entry would make that event replayable — see ADR-0047
+        if (count($this->seen) >= $this->maxEntries) {
+            return false;
         }
+
+        $this->seen[$key] = $now + $ttlSeconds;
 
         return true;
     }

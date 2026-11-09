@@ -31,18 +31,17 @@ final class InMemoryNip98ReplayGuardTest extends TestCase
         $this->assertTrue($guard->recordOnce($this->eventId('bb'), self::TTL_SECONDS));
     }
 
-    public function testSizeCapEvictsOldestEntry(): void
+    public function testAFullGuardRefusesANewEvent(): void
     {
         $guard = new InMemoryNip98ReplayGuard(new MutableClock(), maxEntries: 2);
 
         $guard->recordOnce($this->eventId('aa'), 3600);
         $guard->recordOnce($this->eventId('bb'), 3600);
-        $guard->recordOnce($this->eventId('cc'), 3600);
 
-        $this->assertTrue($guard->recordOnce($this->eventId('aa'), 3600), 'oldest entry should have been evicted');
+        $this->assertFalse($guard->recordOnce($this->eventId('cc'), 3600));
     }
 
-    public function testSizeCapPreservesNewerEntries(): void
+    public function testAFullGuardKeepsRefusingAReplayOfItsOldestEntry(): void
     {
         $guard = new InMemoryNip98ReplayGuard(new MutableClock(), maxEntries: 2);
 
@@ -50,8 +49,19 @@ final class InMemoryNip98ReplayGuardTest extends TestCase
         $guard->recordOnce($this->eventId('bb'), 3600);
         $guard->recordOnce($this->eventId('cc'), 3600);
 
-        $this->assertFalse($guard->recordOnce($this->eventId('bb'), 3600), 'second entry should still be tracked');
-        $this->assertFalse($guard->recordOnce($this->eventId('cc'), 3600), 'newest entry should still be tracked');
+        $this->assertFalse($guard->recordOnce($this->eventId('aa'), 3600));
+    }
+
+    public function testAFullGuardTakesNewEventsAgainOnceEntriesExpire(): void
+    {
+        $clock = new MutableClock();
+        $guard = new InMemoryNip98ReplayGuard($clock, maxEntries: 2);
+
+        $guard->recordOnce($this->eventId('aa'), 10);
+        $guard->recordOnce($this->eventId('bb'), 10);
+        $clock->advance(11);
+
+        $this->assertTrue($guard->recordOnce($this->eventId('cc'), 10));
     }
 
     public function testPruneRemovesExpiredEntries(): void
